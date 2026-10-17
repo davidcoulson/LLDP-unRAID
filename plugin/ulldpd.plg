@@ -3,15 +3,15 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "ulldpd">
 <!ENTITY author    "davidcoulson">
-<!ENTITY version   "2026.10.17">
+<!ENTITY version   "2026.10.18">
 <!ENTITY launch    "Settings/ULLDPDsettings">
 <!ENTITY gitURL    "https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main">
 <!ENTITY pluginURL "&gitURL;/plugin/&name;.plg">
 <!ENTITY pkgURL    "&gitURL;/packages">
 <!ENTITY plgPATH   "/boot/config/plugins/&name;">
-<!ENTITY plgNAME   "ulldpd-2026.10.17-x86_64-1">
-<!ENTITY plgMD5    "437c79a74a202978ab913b2e6390f096">
-<!ENTITY plgSHA256 "5565303a94cde282716ec888134e45c738acea2237a79631b2256af85fd891cd">
+<!ENTITY plgNAME   "ulldpd-2026.10.18-x86_64-1">
+<!ENTITY plgMD5    "c5442f92330bf7984364b6a39bd2400f">
+<!ENTITY plgSHA256 "95d8af82580cde4546a847c67d2193adfb0220e44f872e4e08b34c20088767f7">
 <!ENTITY lldpdNAME "lldpd-1.0.22-x86_64-1">
 <!ENTITY lldpdMD5  "09d7c96070494afdeb31e5d0629200c4">
 <!ENTITY lldpdSHA256 "d31e863c54b527f09ca10595b1edb24d4af907ce29a7eb1b03c490a2fc01896c">
@@ -22,6 +22,16 @@
 
 <CHANGES>
 ## LLDP for UNRAID
+###2026.10.18
+#### Settings page and dashboard rework
+- new: neighbors are shown as tables (interface, protocol, system name, chassis ID, port ID, port description, VLANs, management IPs, age) directly on the settings page and refresh automatically; the "Show Neighbors" popup is gone
+- new: local chassis information shown as a compact table
+- new: status line with running/stopped, pid, neighbor count and lldpd version
+- new: dashboard tile with the neighbor summary (local interface to switch/port) linking to the settings page
+- new: settings for interface pattern, management address pattern, chassis ID interface, system name and description overrides, transmit interval and hold, receive-only mode and interface description (ifAlias) updates
+- new: advanced custom lldpd configuration (/boot/config/plugins/ulldpd/custom.conf), edited on the settings page and copied to /etc/lldpd.d/ at start
+- change: help texts explain that Apply restarts the running service and what CDP/FDP/SONMP/EDP do
+- security: all new settings are whitelisted and validated in both rc.lldpd and PHP (invalid values are ignored); the new endpoints are CSRF-protected, size-limited and escape all output
 ###2026.10.17
 #### Fork release (davidcoulson/LLDP-unRAID), continuing the unmaintained project by desertwitch
 - security: updated from lldpd-1.0.20 to lldpd-1.0.22 (fixes CVE-2026-46433, out-of-bounds read in VLAN handling)
