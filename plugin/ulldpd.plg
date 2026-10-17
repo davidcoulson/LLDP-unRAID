@@ -3,15 +3,15 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "ulldpd">
 <!ENTITY author    "davidcoulson">
-<!ENTITY version   "2026.10.18">
+<!ENTITY version   "2026.10.19">
 <!ENTITY launch    "Settings/ULLDPDsettings">
 <!ENTITY gitURL    "https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main">
 <!ENTITY pluginURL "&gitURL;/plugin/&name;.plg">
 <!ENTITY pkgURL    "&gitURL;/packages">
 <!ENTITY plgPATH   "/boot/config/plugins/&name;">
-<!ENTITY plgNAME   "ulldpd-2026.10.18-x86_64-1">
-<!ENTITY plgMD5    "00e3fef89588df433e5ccb548dff5e1b">
-<!ENTITY plgSHA256 "2e5e6d2b1f5a62b1f6535f0802cd2a916efe12162172f19dc3ca05d6ad1e79d2">
+<!ENTITY plgNAME   "ulldpd-2026.10.19-x86_64-1">
+<!ENTITY plgMD5    "052d653b0e31ed53a08e5abd37786b91">
+<!ENTITY plgSHA256 "1f51712d5976727c510de6b89da70bbaee4f8b35f69b2d185bddb228dea7a313">
 <!ENTITY lldpdNAME "lldpd-1.0.22-x86_64-1">
 <!ENTITY lldpdMD5  "09d7c96070494afdeb31e5d0629200c4">
 <!ENTITY lldpdSHA256 "d31e863c54b527f09ca10595b1edb24d4af907ce29a7eb1b03c490a2fc01896c">
@@ -22,6 +22,9 @@
 
 <CHANGES>
 ## LLDP for UNRAID
+###2026.10.19
+- change: removed the introductory LLDP description text from the settings page
+
 ###2026.10.18
 #### Settings page and dashboard rework
 - new: neighbors are shown as tables (interface, protocol, system name, chassis ID, port ID, port description, VLANs, management IPs, age) directly on the settings page and refresh automatically; the "Show Neighbors" popup is gone
