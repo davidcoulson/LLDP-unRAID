@@ -45,13 +45,6 @@ function ulldpd_txt($cfg, $key, $label, $help, $pattern, $max, $placeholder = ''
 
 <span style="float:right;margin-right:10px"><a href="https://github.com/davidcoulson/LLDP-unRAID/issues" target="_blank" title="LLDP Support (GitHub issues)"><i class="fa fa-medkit"></i> <u>Support</u></a></span>
 
-<div>
-<div>LLDP allows you to know exactly on which port is a server (and reciprocally).</div>
-<div>LLDP is an industry standard protocol designed to supplant proprietary Link-Layer protocols.</div>
-<div>The goal of LLDP is to provide an inter-vendor compatible mechanism to deliver Link-Layer notifications to adjacent network devices.</div>
-</div>
-
-<br>
 
 <dl>
     <dt>Status:</dt>
