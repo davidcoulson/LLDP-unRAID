@@ -14,4 +14,6 @@
 # included in all copies or substantial portions of the Software.
 #
 echo "Stopping LLDP Service..."
-/etc/rc.d/rc.lldpd stop | logger
+/etc/rc.d/rc.lldpd stop 2>&1 | logger -t ulldpd
+# report the exit code of rc.lldpd, not the one of logger
+exit "${PIPESTATUS[0]}"

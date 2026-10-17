@@ -2,9 +2,19 @@ LLDP for UNRAID
 ================
 _A plugin that integrates a Link Layer Discovery Protocol service into UNRAID systems._
 
-![GitHub Tag](https://img.shields.io/github/v/tag/desertwitch/LLDP-unRAID?label=release&color=peru)
-[![CodeFactor](https://www.codefactor.io/repository/github/desertwitch/lldp-unraid/badge)](https://www.codefactor.io/repository/github/desertwitch/lldp-unraid)
+This is a maintained fork (https://github.com/davidcoulson/LLDP-unRAID) of the
+original plugin by **desertwitch** (https://github.com/desertwitch/LLDP-unRAID),
+which is no longer maintained. Full credit for the original work goes to
+desertwitch and the authors credited in the source files.
+
+Install from Unraid via Plugins > Install Plugin, using the URL:
+
+    https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main/plugin/ulldpd.plg
+
+Report problems at https://github.com/davidcoulson/LLDP-unRAID/issues
 
 This project continues to be licensed under ISC, GPL2 and/or GPL3 (where applicable).
+
+Building the lldpd package: see `build/build-lldpd.sh`.
 
 <sub>lldpd Source Code: https://github.com/lldpd/lldpd</sub>

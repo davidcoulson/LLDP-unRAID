@@ -27,7 +27,7 @@ Markdown="false"
 require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
 ?>
 
-<span style="float:right;margin-right:10px"><a href="https://forums.unraid.net/topic/155553-plugin-lldp-for-unraid-610-support-topic/" target="_blank" title="LLDP Support Thread"><i class="fa fa-medkit"></i> <u>Support Thread</u></a></span>
+<span style="float:right;margin-right:10px"><a href="https://github.com/davidcoulson/LLDP-unRAID/issues" target="_blank" title="LLDP Support (GitHub issues)"><i class="fa fa-medkit"></i> <u>Support</u></a></span>
 
 <div>
 <div>LLDP allows you to know exactly on which port is a server (and reciprocally).</div>
@@ -38,13 +38,16 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
 <br>
 
 <form markdown="0" id="ulldpd-settings" name="ulldpd_settings" method="POST" action="/update.php" target="progressFrame">
+    <?if (isset($var['csrf_token'])):?>
+    <input type="hidden" name="csrf_token" value="<?=htmlspecialchars($var['csrf_token'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');?>">
+    <?endif;?>
     <input type="hidden" name="#file" value="ulldpd/ulldpd.cfg">
     <input type="hidden" id="command" name="#command" value="" />
 
     <dl>
         <dt>LLDP Backend:</dt>
         <dd>
-	        <strong><?= isset($ulldpd_installed_backend) && $ulldpd_installed_backend ? $ulldpd_installed_backend : "n/a" ?></strong>
+            <strong><?= isset($ulldpd_installed_backend) && $ulldpd_installed_backend ? $ulldpd_installed_backend : "n/a" ?></strong>
         </dd>
     </dl>
 
@@ -66,7 +69,7 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
     <dl>
         <dt>Force LLDP Protocol:</dt>
         <dd>
-            <select class="ulldpd-run" id="FORCE" name="FORCE" size="1">
+            <select id="FORCE" name="FORCE" size="1">
                 <?=mk_option($ulldpd_force, 'disable', 'No');?>
                 <?=mk_option($ulldpd_force, 'enable', 'Yes');?>
             </select>
@@ -81,7 +84,7 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
     <dl>
         <dt>Enable CDP Protocol:</dt>
         <dd>
-            <select class="ulldpd-run" id="CDP" name="CDP" size="1">
+            <select id="CDP" name="CDP" size="1">
                 <?=mk_option($ulldpd_cdp, 'disable', 'No');?>
                 <?=mk_option($ulldpd_cdp, 'enable', 'Yes');?>
             </select>
@@ -95,7 +98,7 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
     <dl>
         <dt>Enable FDP Protocol:</dt>
         <dd>
-            <select class="ulldpd-run" id="FDP" name="FDP" size="1">
+            <select id="FDP" name="FDP" size="1">
                 <?=mk_option($ulldpd_fdp, 'disable', 'No');?>
                 <?=mk_option($ulldpd_fdp, 'enable', 'Yes');?>
             </select>
@@ -109,7 +112,7 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
     <dl>
         <dt>Enable SONMP Protocol:</dt>
         <dd>
-            <select class="ulldpd-run" id="SONMP" name="SONMP" size="1">
+            <select id="SONMP" name="SONMP" size="1">
                 <?=mk_option($ulldpd_sonmp, 'disable', 'No');?>
                 <?=mk_option($ulldpd_sonmp, 'enable', 'Yes');?>
             </select>
@@ -123,7 +126,7 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
     <dl>
         <dt>Enable EDP Protocol:</dt>
         <dd>
-            <select class="ulldpd-run" id="EDP" name="EDP" size="1">
+            <select id="EDP" name="EDP" size="1">
                 <?=mk_option($ulldpd_edp, 'disable', 'No');?>
                 <?=mk_option($ulldpd_edp, 'enable', 'Yes');?>
             </select>
@@ -137,7 +140,7 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
     <dl>
         <dt>
             <span>
-                <input id="DEFAULT" class="ulldpd-run" type="submit" name="#default" value="Default">
+                <input id="DEFAULT" type="submit" name="#default" value="Default">
                 <input id="SHOWNBS" type="button" value="Show Neighbors">
             </span>
         </dt>
@@ -154,25 +157,21 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
 <?if ($ulldpd_running):?>
 <table class="tablesorter">
 <thead><tr><th>Propagated Information</th></tr></thead>
-<tbody id="ulldpd_summary"><tr><td><pre><?=shell_exec("/usr/sbin/lldpcli show chassis 2>/dev/null");?></pre></td></tr></tbody>
+<tbody id="ulldpd_summary"><tr><td><pre><?=ulldpd_show('chassis');?></pre></td></tr></tbody>
 </table>
 <?endif;?>
 
 <script>
+var ulldpdRunning = <?=json_encode($ulldpd_running);?>;
 function checkRUNNING(){
+    // protocol controls stay enabled (disabled controls are not POSTed and would be
+    // dropped from the configuration); changes are applied by restarting a running service
     if ($('#SERVICE').val() === 'enable')
-        $('#command').val('/usr/local/emhttp/plugins/ulldpd/scripts/start');
+        $('#command').val('/usr/local/emhttp/plugins/ulldpd/scripts/' + (ulldpdRunning ? 'restart' : 'start'));
     else
         $('#command').val('/usr/local/emhttp/plugins/ulldpd/scripts/stop');
-    if ("<?=$ulldpd_running;?>" == 1){
-        $('.ulldpd-run').prop('disabled', true);
-        $('#RESTART').prop('disabled', false);
-        $('#SHOWNBS').prop('disabled', false);
-    }else{
-        $('.ulldpd-run').prop('disabled', false);
-        $('#RESTART').prop('disabled', true);
-        $('#SHOWNBS').prop('disabled', true);
-    }
+    $('#RESTART').prop('disabled', !ulldpdRunning);
+    $('#SHOWNBS').prop('disabled', !ulldpdRunning);
 }
 function Restart() {
     $('#command').val('/usr/local/emhttp/plugins/ulldpd/scripts/restart');

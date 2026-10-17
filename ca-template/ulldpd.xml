@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- Community Applications template for the davidcoulson fork of LLDP for UNRAID.
+     Submit/maintain via the CA moderation repository; the original upstream
+     template (desertwitch) should be retired in favour of this one. -->
+<Plugin>
+  <Name>LLDP for UNRAID</Name>
+  <PluginURL>https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main/plugin/ulldpd.plg</PluginURL>
+  <PluginAuthor>davidcoulson</PluginAuthor>
+  <Author>davidcoulson (fork of desertwitch/LLDP-unRAID)</Author>
+  <Category>Network:Management Tools:</Category>
+  <Support>https://github.com/davidcoulson/LLDP-unRAID/issues</Support>
+  <Project>https://github.com/davidcoulson/LLDP-unRAID</Project>
+  <Icon>https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main/plugin/ulldpd.png</Icon>
+  <MinVer>6.12.0</MinVer>
+  <Overview>Integrates a Link Layer Discovery Protocol (LLDP) service (lldpd) into Unraid so the server announces itself to switches and shows its neighbors.</Overview>
+  <Description>Integrates a Link Layer Discovery Protocol (LLDP) service (lldpd) into Unraid. LLDP lets you know exactly which switch port a server is connected to and vice versa. Supports optional CDP, FDP, SONMP and EDP.</Description>
+</Plugin>

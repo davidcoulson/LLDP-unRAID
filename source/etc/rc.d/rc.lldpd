@@ -35,32 +35,155 @@
 #
 PROG="ulldpd"
 PLGPATH="/boot/config/plugins/$PROG"
-CONFIG=$PLGPATH/$PROG.cfg
+CONFIG="$PLGPATH/$PROG.cfg"
+LLDPD="/usr/sbin/lldpd"
+LLDPCLI="/usr/sbin/lldpcli"
+PIDFILE="/run/lldpd.pid"
+CHROOTDIR="/run/lldpd"
 
-if [ -e "$CONFIG" ]; then
-    source "$CONFIG"
-fi
+# Configuration defaults (only the keys below are ever read from the cfg file)
+SERVICE="disable"
+FORCE="disable"
+CDP="disable"
+FDP="disable"
+SONMP="disable"
+EDP="disable"
 
-mkdir -p /run/lldpd
+# The configuration lives on /boot and is user/web-writable: it is parsed as
+# DATA (whitelisted keys, whitelisted values) and never executed with "source".
+load_config() {
+    local line key val
+    [ -r "$CONFIG" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        if [[ $line =~ ^[[:space:]]*(SERVICE|FORCE|CDP|FDP|SONMP|EDP)[[:space:]]*=[[:space:]]*[\"\']?(enable|disable)[\"\']?[[:space:]]*$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+            printf -v "$key" '%s' "$val"
+        fi
+    done < "$CONFIG"
+}
+
+# PID of the running daemon (pid file + executable identity), empty if none
+lldpd_pid() {
+    local pid exe
+    [ -r "$PIDFILE" ] || return 1
+    pid="$(head -n1 "$PIDFILE" 2>/dev/null)"
+    [[ $pid =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] || return 1
+    exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || return 1
+    exe="${exe% (deleted)}"
+    [ "${exe##*/}" == "lldpd" ] || return 1
+    echo "$pid"
+}
+
+lldpd_running() {
+    lldpd_pid >/dev/null
+}
 
 lldpd_start() {
-  [ "$FORCE" == "enable" ] && PROTOFORCE="-l" || PROTOFORCE=""
-  [ "$CDP" == "enable" ] && PROTOCDP="-c" || PROTOCDP=""
-  [ "$FDP" == "enable" ] && PROTOFDP="-f" || PROTOFDP=""
-  [ "$SONMP" == "enable" ] && PROTOSONMP="-s" || PROTOSONMP=""
-  [ "$EDP" == "enable" ] && PROTOEDP="-e" || PROTOEDP=""
-  echo "Starting LLDP service with parameters: $PROTOFORCE $PROTOCDP $PROTOFDP $PROTOSONMP $PROTOEDP -I eth*"
-  /usr/sbin/lldpd "$PROTOFORCE" "$PROTOCDP" "$PROTOFDP" "$PROTOSONMP" "$PROTOEDP" -I "eth*" >/dev/null 2>&1
+    local args=() out rc
+
+    if lldpd_running; then
+        echo "LLDP service is already running (pid $(lldpd_pid))."
+        return 0
+    fi
+    if [ ! -x "$LLDPD" ]; then
+        echo "ERROR: $LLDPD not found; the lldpd package is not installed." >&2
+        return 1
+    fi
+
+    load_config
+    [ "$FORCE" == "enable" ] && args+=(-l)
+    [ "$CDP" == "enable" ] && args+=(-c)
+    [ "$FDP" == "enable" ] && args+=(-f)
+    [ "$SONMP" == "enable" ] && args+=(-s)
+    [ "$EDP" == "enable" ] && args+=(-e)
+    args+=(-I 'eth*')
+
+    echo "Starting LLDP service with parameters: ${args[*]}"
+    mkdir -p "$CHROOTDIR"
+    rm -f "$PIDFILE"
+
+    out="$(mktemp)" || return 1
+    "$LLDPD" "${args[@]}" >"$out" 2>&1
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        echo "ERROR: lldpd failed to start (exit code $rc):" >&2
+        cat "$out" >&2
+        rm -f "$out"
+        return $rc
+    fi
+
+    # readiness: daemon alive (pid + exe) and answering on its control socket
+    for _ in $(seq 1 20); do
+        if lldpd_running && timeout 5 "$LLDPCLI" show chassis >/dev/null 2>&1; then
+            [ -s "$out" ] && cat "$out"
+            rm -f "$out"
+            echo "LLDP service is running (pid $(lldpd_pid))."
+            return 0
+        fi
+        sleep 0.5
+    done
+
+    echo "ERROR: lldpd was started but is not ready (no pid file or no answer from lldpcli)." >&2
+    cat "$out" >&2
+    rm -f "$out"
+    return 1
 }
 
 lldpd_stop() {
-  killall lldpd
+    local pid
+    pid="$(lldpd_pid)"
+    if [ -n "$pid" ]; then
+        kill -TERM "$pid" 2>/dev/null
+        for _ in $(seq 1 20); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.5
+        done
+        kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+    fi
+    # leftovers (older plugin versions kept the pid file elsewhere)
+    if pgrep -x lldpd >/dev/null 2>&1; then
+        pkill -TERM -x lldpd 2>/dev/null
+        for _ in $(seq 1 10); do
+            pgrep -x lldpd >/dev/null 2>&1 || break
+            sleep 0.5
+        done
+        pkill -KILL -x lldpd 2>/dev/null
+    fi
+    rm -f "$PIDFILE" /run/lldpd.socket
+    if pgrep -x lldpd >/dev/null 2>&1; then
+        echo "ERROR: lldpd could not be stopped." >&2
+        return 1
+    fi
+    echo "LLDP service is stopped."
+    return 0
 }
 
 lldpd_restart() {
-  lldpd_stop
-  sleep 1
-  lldpd_start
+    lldpd_stop || return $?
+    lldpd_start
+}
+
+lldpd_status() {
+    local pid
+    if pid="$(lldpd_pid)"; then
+        echo "LLDP service is running (pid $pid)."
+        return 0
+    fi
+    echo "LLDP service is not running."
+    return 3
+}
+
+# start only when enabled in the configuration (used after plugin install/boot)
+lldpd_autostart() {
+    load_config
+    if [ "$SERVICE" == "enable" ]; then
+        lldpd_start
+    else
+        echo "LLDP service is disabled in the configuration; not starting."
+        return 0
+    fi
 }
 
 case "$1" in
@@ -73,8 +196,15 @@ case "$1" in
   'restart')
     lldpd_restart
   ;;
+  'status')
+    lldpd_status
+  ;;
+  'autostart')
+    lldpd_autostart
+  ;;
   *)
-    echo "Usage: $0 start|stop|restart"
+    echo "Usage: $0 start|stop|restart|status|autostart" >&2
+    exit 2
   ;;
 esac
-
+exit $?
