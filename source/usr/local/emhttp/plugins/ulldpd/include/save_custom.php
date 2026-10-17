@@ -13,6 +13,7 @@ $content = $_POST['content'] ?? null;
 if (!is_string($content)) ulldpd_json_exit(400, ['error' => 'missing content']);
 $content = str_replace("\r\n", "\n", $content);
 $content = str_replace("\r", "\n", $content);
+if (trim($content) !== '' && substr($content, -1) !== "\n") $content .= "\n";
 if (strlen($content) > ULLDPD_CUSTOM_MAX) ulldpd_json_exit(413, ['error' => 'configuration is too large (limit ' . ULLDPD_CUSTOM_MAX . ' bytes)']);
 if (preg_match('/[^\x09\x0A\x20-\x7E]/', $content)) ulldpd_json_exit(400, ['error' => 'only plain ASCII text is allowed']);
 foreach (explode("\n", $content) as $n => $line) {
@@ -28,10 +29,10 @@ if (trim($content) === '') {
     if (file_exists(ULLDPD_CUSTOM_FILE) && !@unlink(ULLDPD_CUSTOM_FILE)) ulldpd_json_exit(500, ['error' => 'cannot remove custom configuration']);
     ulldpd_json_exit(200, ['ok' => true, 'message' => 'Custom configuration removed.']);
 }
-if (substr($content, -1) !== "\n") $content .= "\n";
 
-$tmp = ULLDPD_CUSTOM_FILE . '.tmp';
-if (@file_put_contents($tmp, $content, LOCK_EX) !== strlen($content) || !@rename($tmp, ULLDPD_CUSTOM_FILE)) {
+/* unique temporary file per request, renamed into place */
+$tmp = @tempnam($dir, 'custom.conf.');
+if ($tmp === false || @file_put_contents($tmp, $content, LOCK_EX) !== strlen($content) || !@rename($tmp, ULLDPD_CUSTOM_FILE)) {
     @unlink($tmp);
     ulldpd_json_exit(500, ['error' => 'cannot write ' . ULLDPD_CUSTOM_FILE]);
 }

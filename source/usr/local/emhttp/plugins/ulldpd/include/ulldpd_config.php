@@ -141,7 +141,7 @@ function ulldpd_json($what) {
     if (!is_executable(ULLDPD_LLDPCLI)) return null;
     list($rc, $out) = ulldpd_run([ULLDPD_LLDPCLI, '-f', 'json', 'show', $what]);
     if ($rc !== 0) return null;
-    $json = json_decode($out, true);
+    $json = json_decode($out, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
     return is_array($json) ? $json : null;
 }
 
