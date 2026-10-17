@@ -29,7 +29,7 @@ if [ "${DOCKER:-0}" = "1" ] && [ ! -f /.dockerenv ]; then
     mkdir -p "$OUTDIR"
     exec docker run --rm -v "$HERE:/build:ro" -v "$OUTDIR:/out" -e BUILD="$BUILD" \
         vbatts/slackware:15.0 bash -c \
-        'slackpkg -batch=on -default_answer=y install gcc gcc-g++ make binutils glibc kernel-headers libmpc autoconf automake libtool m4 pkg-config curl xz tar >/dev/null 2>&1; /build/build-lldpd.sh /out'
+        'slackpkg -batch=on -default_answer=y update >/dev/null 2>&1; slackpkg -batch=on -default_answer=y install gcc gcc-g++ make binutils glibc kernel-headers libmpc autoconf automake libtool m4 pkg-config flex bison guile gc libunistring libffi gmp elfutils xz tar >/dev/null 2>&1; /build/build-lldpd.sh /out'
 fi
 
 WORKDIR="${WORKDIR:-$(mktemp -d)}"
@@ -38,7 +38,7 @@ mkdir -p "$WORKDIR" "$OUTDIR"
 cd "$WORKDIR"
 
 if [ ! -f "lldpd-${LLDPD_VERSION}.tar.gz" ]; then
-    curl -fsSLo "lldpd-${LLDPD_VERSION}.tar.gz" "$LLDPD_URL"
+    { command -v curl >/dev/null && curl -fsSLo "lldpd-${LLDPD_VERSION}.tar.gz" "$LLDPD_URL"; } || wget -q -O "lldpd-${LLDPD_VERSION}.tar.gz" "$LLDPD_URL"
 fi
 echo "${LLDPD_SHA256}  lldpd-${LLDPD_VERSION}.tar.gz" | sha256sum -c -
 

@@ -13,8 +13,8 @@
 <!ENTITY plgMD5    "437c79a74a202978ab913b2e6390f096">
 <!ENTITY plgSHA256 "5565303a94cde282716ec888134e45c738acea2237a79631b2256af85fd891cd">
 <!ENTITY lldpdNAME "lldpd-1.0.22-x86_64-1">
-<!ENTITY lldpdMD5  "93107cad852162e41772c10b234c9048">
-<!ENTITY lldpdSHA256 "37eed2944dcef4ddeb84c00c8b9d0d3021cbdeb461f43e9d2ddead97a4f3f1ec">
+<!ENTITY lldpdMD5  "09d7c96070494afdeb31e5d0629200c4">
+<!ENTITY lldpdSHA256 "d31e863c54b527f09ca10595b1edb24d4af907ce29a7eb1b03c490a2fc01896c">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 ]>
 
