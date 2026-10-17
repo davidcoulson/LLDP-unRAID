@@ -25,6 +25,22 @@ Markdown="false"
  *
  */
 require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
+$ulldpd_snap = ulldpd_snapshot();
+$ulldpd_csrf = isset($var['csrf_token']) ? htmlspecialchars($var['csrf_token'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '';
+$ulldpd_custom = '';
+if (is_readable(ULLDPD_CUSTOM_FILE) && filesize(ULLDPD_CUSTOM_FILE) <= ULLDPD_CUSTOM_MAX) {
+    $ulldpd_custom = (string)@file_get_contents(ULLDPD_CUSTOM_FILE);
+}
+function ulldpd_sel($cfg, $key, $label, $help) {
+    $v = $cfg[$key];
+    echo "<dl><dt>" . $label . ":</dt><dd><select id=\"$key\" name=\"$key\" size=\"1\">"
+       . mk_option($v, 'disable', 'No') . mk_option($v, 'enable', 'Yes')
+       . "</select></dd></dl>\n<blockquote class=\"inline_help\">" . $help . "</blockquote>\n";
+}
+function ulldpd_txt($cfg, $key, $label, $help, $pattern, $max, $placeholder = '') {
+    echo "<dl><dt>" . $label . ":</dt><dd><input type=\"text\" id=\"$key\" name=\"$key\" class=\"narrow\" style=\"width:30em\" maxlength=\"$max\" pattern=\""
+       . ulldpd_h($pattern) . "\" placeholder=\"" . ulldpd_h($placeholder) . "\" value=\"" . ulldpd_h($cfg[$key]) . "\"></dd></dl>\n<blockquote class=\"inline_help\">" . $help . "</blockquote>\n";
+}
 ?>
 
 <span style="float:right;margin-right:10px"><a href="https://github.com/davidcoulson/LLDP-unRAID/issues" target="_blank" title="LLDP Support (GitHub issues)"><i class="fa fa-medkit"></i> <u>Support</u></a></span>
@@ -37,9 +53,22 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
 
 <br>
 
+<dl>
+    <dt>Status:</dt>
+    <dd id="ulldpd-status"><?=ulldpd_status_html($ulldpd_snap);?></dd>
+</dl>
+
+<div id="ulldpd-neighbors-box">
+<table class="unraid tablesorter"><thead><tr><th>LLDP Neighbors</th></tr></thead></table>
+<div id="ulldpd-neighbors"><?=$ulldpd_snap['running'] ? ulldpd_neighbors_html($ulldpd_snap['rows']) : '<em>The LLDP service is not running.</em>';?></div>
+<table class="unraid tablesorter"><thead><tr><th>Local Chassis (propagated information)</th></tr></thead></table>
+<div id="ulldpd-chassis"><?=$ulldpd_snap['running'] ? ulldpd_chassis_html($ulldpd_snap['chassis']) : '<em>The LLDP service is not running.</em>';?></div>
+<p><input type="button" id="ulldpd-refresh" value="Refresh"> <small>Updates automatically every 10 seconds.</small></p>
+</div>
+
 <form markdown="0" id="ulldpd-settings" name="ulldpd_settings" method="POST" action="/update.php" target="progressFrame">
-    <?if (isset($var['csrf_token'])):?>
-    <input type="hidden" name="csrf_token" value="<?=htmlspecialchars($var['csrf_token'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');?>">
+    <?if ($ulldpd_csrf !== ''):?>
+    <input type="hidden" name="csrf_token" value="<?=$ulldpd_csrf;?>">
     <?endif;?>
     <input type="hidden" name="#file" value="ulldpd/ulldpd.cfg">
     <input type="hidden" id="command" name="#command" value="" />
@@ -64,84 +93,30 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
     <blockquote class="inline_help">
         <p>Set to <strong>'Yes'</strong> to enable and start LLDP service at system boot.</p>
         <p>Set to <strong>'No'</strong> to disable and stop LLDP service at system boot.</p>
+        <p><strong>Apply</strong> saves the settings and <strong>restarts the running service</strong> so that they take effect (a stopped service is started if set to 'Yes', and stopped if set to 'No').</p>
     </blockquote>
 
-    <dl>
-        <dt>Force LLDP Protocol:</dt>
-        <dd>
-            <select id="FORCE" name="FORCE" size="1">
-                <?=mk_option($ulldpd_force, 'disable', 'No');?>
-                <?=mk_option($ulldpd_force, 'enable', 'Yes');?>
-            </select>
-        </dd>
-    </dl>
-
-    <blockquote class="inline_help">
-        <p>Force to send LLDP packets even when there is no LLDP peer detected but there is a peer speaking another protocol detected.</p>
-        <p>By default (= <strong>'No'</strong>), LLDP packets are sent when there is a peer speaking LLDP detected or when there is no peer at all.</p>
-    </blockquote>
-
-    <dl>
-        <dt>Enable CDP Protocol:</dt>
-        <dd>
-            <select id="CDP" name="CDP" size="1">
-                <?=mk_option($ulldpd_cdp, 'disable', 'No');?>
-                <?=mk_option($ulldpd_cdp, 'enable', 'Yes');?>
-            </select>
-        </dd>
-    </dl>
-
-    <blockquote class="inline_help">
-        <p>Enable the support of CDP protocol to deal with Cisco routers that do not speak LLDP.</p>
-    </blockquote>
-
-    <dl>
-        <dt>Enable FDP Protocol:</dt>
-        <dd>
-            <select id="FDP" name="FDP" size="1">
-                <?=mk_option($ulldpd_fdp, 'disable', 'No');?>
-                <?=mk_option($ulldpd_fdp, 'enable', 'Yes');?>
-            </select>
-        </dd>
-    </dl>
-
-    <blockquote class="inline_help">
-        <p>Enable the support of FDP protocol to deal with Foundry routers that do not speak LLDP.</p>
-    </blockquote>
-
-    <dl>
-        <dt>Enable SONMP Protocol:</dt>
-        <dd>
-            <select id="SONMP" name="SONMP" size="1">
-                <?=mk_option($ulldpd_sonmp, 'disable', 'No');?>
-                <?=mk_option($ulldpd_sonmp, 'enable', 'Yes');?>
-            </select>
-        </dd>
-    </dl>
-
-    <blockquote class="inline_help">
-        <p>Enable the support of SONMP protocol to deal with Nortel routers and switches that do not speak LLDP.</p>
-    </blockquote>
-
-    <dl>
-        <dt>Enable EDP Protocol:</dt>
-        <dd>
-            <select id="EDP" name="EDP" size="1">
-                <?=mk_option($ulldpd_edp, 'disable', 'No');?>
-                <?=mk_option($ulldpd_edp, 'enable', 'Yes');?>
-            </select>
-        </dd>
-    </dl>
-
-    <blockquote class="inline_help">
-        <p>Enable the support of EDP protocol to deal with Extreme routers and switches that do not speak LLDP.</p>
-    </blockquote>
+    <?
+    ulldpd_sel($ulldpd_cfg, 'FORCE', 'Force LLDP Protocol', '<p>Force to send LLDP packets even when there is no LLDP peer detected but there is a peer speaking another protocol detected.</p><p>By default (= <strong>\'No\'</strong>), LLDP packets are sent when there is a peer speaking LLDP detected or when there is no peer at all.</p>');
+    ulldpd_sel($ulldpd_cfg, 'CDP', 'Enable CDP Protocol', '<p>CDP (Cisco Discovery Protocol): also send and understand Cisco\'s proprietary discovery frames, so Cisco routers and switches that do not speak LLDP can see this server and show up as neighbors.</p>');
+    ulldpd_sel($ulldpd_cfg, 'FDP', 'Enable FDP Protocol', '<p>FDP (Foundry Discovery Protocol): the same for Foundry (now Brocade/Ruckus) network gear that does not speak LLDP.</p>');
+    ulldpd_sel($ulldpd_cfg, 'SONMP', 'Enable SONMP Protocol', '<p>SONMP (SynOptics Network Management Protocol): the same for Nortel (now Avaya) routers and switches that do not speak LLDP.</p>');
+    ulldpd_sel($ulldpd_cfg, 'EDP', 'Enable EDP Protocol', '<p>EDP (Extreme Discovery Protocol): the same for Extreme Networks routers and switches that do not speak LLDP.</p><p>Enable the legacy protocols only if your network equipment needs them; the neighbor table shows which protocol each neighbor used.</p>');
+    ulldpd_sel($ulldpd_cfg, 'RXONLY', 'Receive-only Mode', '<p>When <strong>\'Yes\'</strong> this server listens for neighbors but never transmits LLDP frames (lldpd option <code>-r</code>).</p>');
+    ulldpd_sel($ulldpd_cfg, 'IFALIAS', 'Update Interface Descriptions', '<p>When <strong>\'Yes\'</strong> lldpd sets each interface\'s description (ifAlias) to the name of the neighbor found on it, or to the number of neighbors.</p>');
+    ulldpd_txt($ulldpd_cfg, 'IFACES', 'Interface Pattern', '<p>Comma separated list of interfaces to use; wildcards (<code>*</code>) are allowed, and a leading <code>!</code> excludes an interface, e.g. <code>eth*,!eth2</code>. Default: <code>eth*</code>. Allowed characters: letters, digits and <code>_ . * , ! -</code>.</p>', '[A-Za-z0-9_.*,!\-]{1,128}', 128, 'eth*');
+    ulldpd_txt($ulldpd_cfg, 'MGMT_PATTERN', 'Management Address Pattern', '<p>Which of this server\'s addresses are advertised as management addresses (comma separated, wildcards and <code>!</code> exclusions allowed). Without it the first IPv4 and IPv6 address are used. Example to leave out the Tailscale IPv6 address: <code>!fd7a:115c:a1e0:*</code>; to remove all IPv6 addresses: <code>!*:*</code>. Only hexadecimal digits and <code>. : / * , !</code> are accepted. Leave empty for the default.</p>', '[0-9A-Fa-f.:\/*,!]{0,256}', 256, '!fd7a:115c:a1e0:*');
+    ulldpd_txt($ulldpd_cfg, 'CHASSIS_IFACE', 'Interface for Chassis ID', '<p>Interface (or pattern) whose MAC address is used to compute the chassis ID advertised to neighbors. Leave empty for the default. Same allowed characters as the interface pattern.</p>', '[A-Za-z0-9_.*,!\-]{0,128}', 128, 'eth0');
+    ulldpd_txt($ulldpd_cfg, 'SYSNAME', 'System Name Override', '<p>Name advertised to neighbors instead of the server\'s hostname. Letters, digits, <code>. _ -</code>, up to 63 characters. Leave empty to use the hostname.</p>', '[A-Za-z0-9._\-]{0,63}', 63, '');
+    ulldpd_txt($ulldpd_cfg, 'SYSDESCR', 'System Description Override', '<p>Description advertised to neighbors instead of the default (Unraid version and kernel). Printable text up to 200 characters; quotes, backslashes, <code>$ ` ; # | &amp; &lt; &gt;</code> and line breaks are not allowed. Leave empty for the default.</p>', '[A-Za-z0-9 ._,:\/\(\)+@%=~*\[\]\-]{0,200}', 200, '');
+    ulldpd_txt($ulldpd_cfg, 'TX_INTERVAL', 'Transmit Interval (seconds)', '<p>Seconds between two LLDP frames, 1 to 3600. Default: 30.</p>', '[0-9]{1,4}', 4, '30');
+    ulldpd_txt($ulldpd_cfg, 'TX_HOLD', 'Transmit Hold', '<p>Multiplier of the transmit interval used as the time-to-live of sent frames, 1 to 100. Default: 4 (TTL 120 seconds).</p>', '[0-9]{1,3}', 3, '4');
+    ?>
 
     <dl>
         <dt>
             <span>
                 <input id="DEFAULT" type="submit" name="#default" value="Default">
-                <input id="SHOWNBS" type="button" value="Show Neighbors">
             </span>
         </dt>
         <dd>
@@ -152,44 +127,70 @@ require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
             </span>
         </dd>
     </dl>
+    <blockquote class="inline_help">
+        <p><strong>Apply</strong> saves the settings and restarts the running service. <strong>Default</strong> resets all settings to their defaults. <strong>Restart LLDP</strong> restarts the service with the saved settings.</p>
+    </blockquote>
 </form>
 
-<?if ($ulldpd_running):?>
-<table class="tablesorter">
-<thead><tr><th>Propagated Information</th></tr></thead>
-<tbody id="ulldpd_summary"><tr><td><pre><?=ulldpd_show('chassis');?></pre></td></tr></tbody>
-</table>
-<?endif;?>
+<form markdown="0" id="ulldpd-custom-form" onsubmit="return false;">
+    <dl>
+        <dt>Advanced: custom lldpd configuration:</dt>
+        <dd>
+            <textarea id="ulldpd-custom" rows="8" maxlength="<?=ULLDPD_CUSTOM_MAX;?>" spellcheck="false" style="width:40em;max-width:100%;font-family:monospace" placeholder="# e.g. configure system chassisid my-server"><?=htmlspecialchars($ulldpd_custom, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');?></textarea><br>
+            <input type="button" id="ulldpd-custom-save" value="Save custom configuration">
+            <span id="ulldpd-custom-msg"></span>
+        </dd>
+    </dl>
+    <blockquote class="inline_help">
+        <p><strong>For advanced users.</strong> Extra <code>lldpcli</code> commands (one <code>configure ...</code> or <code>unconfigure ...</code> command per line, <code># comments</code> allowed; see <code>man lldpcli</code>) stored in <code>/boot/config/plugins/ulldpd/custom.conf</code> and copied to <code>/etc/lldpd.d/</code> when the service starts. They are applied after the settings above and can override them. Plain ASCII only, up to <?=ULLDPD_CUSTOM_MAX;?> bytes. Saving does not restart the service: use <strong>Restart LLDP</strong> to apply. An empty text removes the file.</p>
+    </blockquote>
+</form>
 
 <script>
-var ulldpdRunning = <?=json_encode($ulldpd_running);?>;
+var ulldpdRunning = <?=json_encode($ulldpd_snap['running']);?>;
+var ulldpdCsrf = <?=json_encode($var['csrf_token'] ?? '');?>;
 function checkRUNNING(){
     // protocol controls stay enabled (disabled controls are not POSTed and would be
-    // dropped from the configuration); changes are applied by restarting a running service
+    // dropped from the configuration); Apply restarts a running service
     if ($('#SERVICE').val() === 'enable')
         $('#command').val('/usr/local/emhttp/plugins/ulldpd/scripts/' + (ulldpdRunning ? 'restart' : 'start'));
     else
         $('#command').val('/usr/local/emhttp/plugins/ulldpd/scripts/stop');
     $('#RESTART').prop('disabled', !ulldpdRunning);
-    $('#SHOWNBS').prop('disabled', !ulldpdRunning);
 }
 function Restart() {
     $('#command').val('/usr/local/emhttp/plugins/ulldpd/scripts/restart');
 }
-function ShowNBS() {
-    openBox('/usr/local/emhttp/plugins/ulldpd/scripts/shownbs', 'LLDP Neighbors', 600, 600, false);
+// all HTML below is escaped server-side (include/status.php)
+function ulldpdRefresh() {
+    if (document.hidden) return;
+    $.post('/plugins/ulldpd/include/status.php', {what: 'all', csrf_token: ulldpdCsrf}, function(d) {
+        if (!d || d.error) return;
+        ulldpdRunning = !!d.running;
+        $('#ulldpd-status').html(d.status);
+        $('#ulldpd-neighbors').html(d.neighbors);
+        $('#ulldpd-chassis').html(d.chassis);
+        checkRUNNING();
+    }, 'json');
+}
+function ulldpdSaveCustom() {
+    $('#ulldpd-custom-msg').text('Saving...');
+    $.post('/plugins/ulldpd/include/save_custom.php', {content: $('#ulldpd-custom').val(), csrf_token: ulldpdCsrf}, 'json')
+        .done(function(d) { $('#ulldpd-custom-msg').text(d && d.message ? d.message : 'Saved.'); })
+        .fail(function(x) {
+            var m = 'Save failed.';
+            try { m = JSON.parse(x.responseText).error || m; } catch (e) {}
+            $('#ulldpd-custom-msg').text(m);
+        });
 }
 $(function() {
-    $('#btnApply').click(function(){
-        $('#ulldpd-settings').submit();
-    });
-
     $('#SERVICE').change(checkRUNNING);
-
     $('#RESTART').click(Restart);
-    $('#SHOWNBS').click(ShowNBS);
+    $('#ulldpd-refresh').click(ulldpdRefresh);
+    $('#ulldpd-custom-save').click(ulldpdSaveCustom);
 
     checkRUNNING();
+    setInterval(ulldpdRefresh, 10000);
 
     showStatus('lldpd');
 

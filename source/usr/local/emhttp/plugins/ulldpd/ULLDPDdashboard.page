@@ -1,0 +1,56 @@
+Menu="Dashboard:0"
+Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.11.9','>')"
+---
+<?PHP
+/* LLDP neighbor summary tile for the Unraid dashboard (7.x).
+ * Everything shown comes from lldpcli and is remote-controlled: it is escaped
+ * by ulldpd_tile_rows_html()/ulldpd_h() before it reaches the page.
+ */
+require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
+
+$ulldpd_tile_snap = ulldpd_snapshot(false);
+$ulldpd_tile_rows = $ulldpd_tile_snap['running']
+    ? ulldpd_tile_rows_html($ulldpd_tile_snap['rows'])
+    : '<tr class="ulldpd-row"><td><em>LLDP service is not running.</em></td></tr>';
+$ulldpd_tile_csrf = json_encode($var['csrf_token'] ?? '');
+
+$mytiles['ulldpd']['column2'] =
+<<<EOT
+<tbody id="tblLLDPDash" title="_(LLDP Neighbors)_">
+<tr>
+  <td>
+    <span class='tile-header'>
+      <span class='tile-header-left'>
+        <i class='fa fa-podcast f32'></i>
+        <div class='section'>
+          <h3 class='tile-header-main'>_(LLDP Neighbors)_</h3>
+          <span>_(Local interface)_ &rarr; _(switch / port)_</span>
+        </div>
+      </span>
+      <span class='tile-header-right'>
+        <span class='tile-header-right-controls'>
+          <a href='/Settings/ULLDPDsettings' title="_(Go to LLDP settings)_"><i class='fa fa-fw fa-cog control'></i></a>
+        </span>
+      </span>
+    </span>
+  </td>
+</tr>
+{$ulldpd_tile_rows}
+</tbody>
+EOT;
+?>
+<script>
+(function() {
+  var csrf = <?=$ulldpd_tile_csrf;?>;
+  function refresh() {
+    if (document.hidden) return;
+    $.post('/plugins/ulldpd/include/status.php', {what: 'tile', csrf_token: csrf}, function(d) {
+      if (!d || d.error || typeof d.rows !== 'string') return;
+      var t = $('#tblLLDPDash');
+      t.find('tr.ulldpd-row').remove();
+      t.append(d.rows);
+    }, 'json');
+  }
+  $(function() { setInterval(refresh, 15000); });
+})();
+</script>
