@@ -3,24 +3,39 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "ulldpd">
 <!ENTITY author    "davidcoulson">
-<!ENTITY version   "2026.10.16">
+<!ENTITY version   "2026.10.17">
 <!ENTITY launch    "Settings/ULLDPDsettings">
 <!ENTITY gitURL    "https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main">
 <!ENTITY pluginURL "&gitURL;/plugin/&name;.plg">
 <!ENTITY pkgURL    "&gitURL;/packages">
 <!ENTITY plgPATH   "/boot/config/plugins/&name;">
-<!ENTITY plgNAME   "ulldpd-2025.08.21-x86_64-1">
-<!ENTITY plgMD5    "188cf1c164ab72d462112783577a3c0b">
+<!ENTITY plgNAME   "ulldpd-2026.10.17-x86_64-1">
+<!ENTITY plgMD5    "437c79a74a202978ab913b2e6390f096">
+<!ENTITY plgSHA256 "5565303a94cde282716ec888134e45c738acea2237a79631b2256af85fd891cd">
+<!ENTITY lldpdNAME "lldpd-1.0.22-x86_64-1">
+<!ENTITY lldpdMD5  "93107cad852162e41772c10b234c9048">
+<!ENTITY lldpdSHA256 "37eed2944dcef4ddeb84c00c8b9d0d3021cbdeb461f43e9d2ddead97a4f3f1ec">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 ]>
 
-<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" support="https://github.com/davidcoulson/LLDP-unRAID/issues" min="6.10.0">
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" support="https://github.com/davidcoulson/LLDP-unRAID/issues" min="6.12.0">
 
 <CHANGES>
 ## LLDP for UNRAID
+###2026.10.17
+#### Fork release (davidcoulson/LLDP-unRAID), continuing the unmaintained project by desertwitch
+- security: updated from lldpd-1.0.20 to lldpd-1.0.22 (fixes CVE-2026-46433, out-of-bounds read in VLAN handling)
+- security: lldpd now runs with privilege separation (user/group _lldpd, chroot /run/lldpd)
+- security: configuration is parsed as data (whitelisted keys/values) and no longer executed as shell code
+- security: all lldpcli output on the settings page and neighbor view is HTML-escaped
+- fix: lldpd is built without libxml2/readline and with its own libevent, so no libraries missing on Unraid 7.x are needed (minimum Unraid is now 6.12.0)
+- fix: packages are downloaded and verified (MD5 and SHA256) before the running service is stopped; old package files are pruned
+- fix: start/stop/restart report real failures, check readiness, and log with tag ulldpd; new status action
+- fix: protocol settings are no longer dropped when applying with the service running
+- change: update and download URLs now point to the davidcoulson fork
 ###2026.10.16
-#### Plugin Advisory: End of Support on 30.11.2026
-With new details on Unraid 8 now available, it felt like the right time to make a final decision about this plugin and set clear expectations. I've been focused on new things for a while and am preparing the transition of my own infrastructure, so I can no longer give the plugin the attention and love it deserves. It wasn't an easy choice, but support will end on 30.11.2026. From that date, the plugin stays installable as-is, but without any guarantee of stability or usability, so use is entirely at your own risk. The repository will be archived, but if a future Unraid release is reported to break the plugin in the support thread, I'll have to cap the maximum supported version and prevent further installs from that version onwards. Forks are very welcome; just coordinate with the Community Applications maintainers. Thank you all for the support over the years - Unraid has been an amazing community to serve, and I hope to stay in touch with many of you on the forums or Discord.
+#### (upstream) Plugin Advisory: End of Support on 30.11.2026
+The original author announced the end of support for the original repository; forks were explicitly welcome. This is such a fork.
 ###2026.10.06
 - announce maintenance mode (no functional changes)
 ###2026.02.11
@@ -51,52 +66,64 @@ With new details on Unraid 8 now available, it felt like the right time to make 
 </CHANGES>
 
 <!--
-stop already existing services before doing anything
+download and verify all packages FIRST (nothing is stopped or changed if this fails)
 -->
-<FILE Run="/bin/bash">
-<INLINE>
-echo "Making sure all existing LLDP services are stopped (before install/upgrade)..."
-killall lldpd >/dev/null 2>&amp;1
-killall lldp-poller >/dev/null 2>&amp;1
-echo ""
-exit 0
-</INLINE>
+<FILE Name="&plgPATH;/&lldpdNAME;.txz" Min="6.12">
+<URL>&pkgURL;/&lldpdNAME;.txz</URL>
+<MD5>&lldpdMD5;</MD5>
+<SHA256>&lldpdSHA256;</SHA256>
 </FILE>
 
-<!--
-install or upgrade dependency files
--->
-<FILE Name="&plgPATH;/lldpd-1.0.20-x86_64-1.txz" Min="6.10" Run="upgradepkg --install-new">
-<URL>&pkgURL;/lldpd-1.0.20-x86_64-1.txz</URL>
-<MD5>550505eabac620d33c44501ca364dd81</MD5>
-</FILE>
-
-<!--
-install or upgrade the plugin itself
--->
-<FILE Name="&plgPATH;/&plgNAME;.txz" Min="6.10" Run="upgradepkg --install-new">
+<FILE Name="&plgPATH;/&plgNAME;.txz" Min="6.12">
 <URL>&gitURL;/archive/&plgNAME;.txz</URL>
 <MD5>&plgMD5;</MD5>
+<SHA256>&plgSHA256;</SHA256>
 </FILE>
 
 <!--
-run the post-installation scripts
+stop the service, install or upgrade the packages, prune old ones, start the service
 -->
 <FILE Run="/bin/bash">
 <INLINE>
-CONFIG=&plgPATH;/&name;.cfg
+PLG=&plgPATH;
 
-# reading our configuration
-echo "Reading LLDP configuration..."
-if [ -e "$CONFIG" ]; then
-    source "$CONFIG"
+for f in "$PLG/&lldpdNAME;.txz" "$PLG/&plgNAME;.txz"; do
+    if [ ! -s "$f" ]; then
+        echo "ERROR: $f is missing; aborting before changing anything."
+        exit 1
+    fi
+done
+
+echo "Stopping existing LLDP service (before install/upgrade)..."
+if [ -x /etc/rc.d/rc.lldpd ]; then
+    /etc/rc.d/rc.lldpd stop
+fi
+killall lldpd >/dev/null 2>&amp;1
+
+echo "Installing packages..."
+if ! upgradepkg --install-new "$PLG/&lldpdNAME;.txz"; then
+    echo "ERROR: installation of &lldpdNAME; failed."
+    /etc/rc.d/rc.lldpd autostart
+    exit 1
+fi
+if ! upgradepkg --install-new "$PLG/&plgNAME;.txz"; then
+    echo "ERROR: installation of &plgNAME; failed."
+    /etc/rc.d/rc.lldpd autostart
+    exit 1
 fi
 
-echo "Determining if LLDP service should be started..."
+echo "Removing superseded package files..."
+for f in "$PLG"/*.txz "$PLG"/*.md5 "$PLG"/*.sha256; do
+    [ -e "$f" ] || continue
+    case "$(basename "$f")" in
+        "&lldpdNAME;.txz"|"&plgNAME;.txz") ;;
+        *) rm -f "$f" ;;
+    esac
+done
 
-if [ "$SERVICE" == "enable" ]; then
-    echo "Starting LLDP service..."
-    /etc/rc.d/rc.lldpd start
+echo "Determining if LLDP service should be started..."
+if ! /etc/rc.d/rc.lldpd autostart; then
+    echo "WARNING: the LLDP service could not be started, see the syslog."
 fi
 
 echo ""
@@ -105,6 +132,7 @@ echo " LLDP for UNRAID has been installed."
 echo " Version: &version; / Plugin Maintainer: &author;"
 echo "-------------------------------------------------------------"
 echo ""
+exit 0
 </INLINE>
 </FILE>
 
@@ -113,20 +141,25 @@ definition for uninstallation of the plugin
 -->
 <FILE Run="/bin/bash" Method="remove">
 <INLINE>
-echo "Making sure all existing LLDP instances are stopped (before uninstall)..."
+echo "Stopping LLDP service (before uninstall)..."
+if [ -x /etc/rc.d/rc.lldpd ]; then
+    /etc/rc.d/rc.lldpd stop
+fi
 killall lldpd >/dev/null 2>&amp;1
-killall lldp-poller >/dev/null 2>&amp;1
 
-removepkg &plgPATH;/*.txz
-rm -rf &plgPATH;
+removepkg ulldpd
+removepkg lldpd
+
+# remove downloaded packages; the user configuration (ulldpd.cfg) is kept
+rm -f &plgPATH;/*.txz &plgPATH;/*.md5 &plgPATH;/*.sha256
 rm -rf &emhttp;
-
-rm -f /etc/cron.daily/lldp-poller >/dev/null 2>&amp;1
+rm -rf /run/lldpd /run/lldpd.pid /run/lldpd.socket
 
 echo ""
 echo "-----------------------------------------------------------"
 echo " LLDP for UNRAID has been removed."
 echo " Version: &version; / Plugin Maintainer: &author;"
+echo " Your settings were kept in &plgPATH;/&name;.cfg"
 echo "-----------------------------------------------------------"
 echo ""
 </INLINE>
