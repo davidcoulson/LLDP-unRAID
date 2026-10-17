@@ -13,4 +13,6 @@
 # The above copyright notice and this permission notice shall be
 # included in all copies or substantial portions of the Software.
 #
-/usr/sbin/lldpcli show neighbors
+# lldpcli output is rendered as JSON and HTML-escaped by PHP (neighbour data is
+# remote-controlled and must never reach the page as markup)
+exec /usr/bin/php -r 'require "/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php"; echo "<pre>", ulldpd_show("neighbors"), "</pre>";'
