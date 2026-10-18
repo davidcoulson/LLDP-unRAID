@@ -46,6 +46,11 @@ GENERATED_CONF="$LLDPD_CONFD/ulldpd.conf"
 CUSTOM_SRC="$PLGPATH/custom.conf"
 CUSTOM_DST="$LLDPD_CONFD/zz-ulldpd-custom.conf"
 CUSTOM_MAX=16384    # bytes; keep in sync with the settings page
+WATCH="/usr/local/emhttp/plugins/ulldpd/scripts/watch"
+POLL="/usr/local/emhttp/plugins/ulldpd/include/poll.php"
+WATCH_PID="/run/ulldpd-watch.pid"
+SYSNET="/sys/class/net"
+MAX_PORTS=64
 
 # Configuration defaults (only the keys below are ever read from the cfg file)
 SERVICE="disable"
@@ -63,14 +68,37 @@ SYSNAME=""
 SYSDESCR=""
 TX_INTERVAL="30"
 TX_HOLD="4"
+PORTID_SUBTYPE="default"
+PORTID_LOCAL=""
+PORTDESCR=""
+BOND_SRC_MAC="default"
+# NOTIFY and NOTIFY_LEVEL are used by the PHP watcher; they are validated here only to warn about bad values
+# shellcheck disable=SC2034
+NOTIFY="disable"
+# shellcheck disable=SC2034
+NOTIFY_LEVEL="normal"
+# per-port settings (interface name -> value), from PORT_STATUS_<if>, PORT_ID_<if>, PORT_DESCR_<if>
+declare -A PORT_STATUS=() PORT_ID=() PORT_DESCRIPTION=() PORT_SEEN=()
 
 # Validators: the same rules as ulldpd_valid() in include/ulldpd_config.php.
 # Returns 0 if $2 is an acceptable value for key $1.
 valid_value() {
     local key="$1" val="$2"
     case "$key" in
-        SERVICE|FORCE|CDP|FDP|SONMP|EDP|RXONLY|IFALIAS)
+        SERVICE|FORCE|CDP|FDP|SONMP|EDP|RXONLY|IFALIAS|NOTIFY)
             [[ $val =~ ^(enable|disable)$ ]] ;;
+        PORTID_SUBTYPE)
+            [[ $val =~ ^(default|ifname|macaddress|local)$ ]] ;;
+        BOND_SRC_MAC)
+            [[ $val =~ ^(default|real|zero|fixed|local)$ ]] ;;
+        NOTIFY_LEVEL)
+            [[ $val =~ ^(normal|warning)$ ]] ;;
+        PORT_STATUS_VALUE)
+            [[ $val =~ ^(rx-and-tx|rx-only|tx-only|disabled)$ ]] ;;
+        PORTID_LOCAL|PORT_ID_VALUE)
+            valid_text "$val" 64 ;;
+        PORTDESCR|PORT_DESCR_VALUE)
+            valid_text "$val" 100 ;;
         IFACES)
             [[ $val =~ ^[A-Za-z0-9_.*,!-]{1,128}$ ]] ;;
         CHASSIS_IFACE)
@@ -90,32 +118,92 @@ valid_value() {
     esac
 }
 
+# Free text for port ID / port description: printable subset, no quotes or
+# newlines, no leading '-' or blank (it becomes an lldpcli argument), and '%'
+# only as the %i (interface name) template. Same rule as ulldpd_text_valid().
+valid_text() {
+    local val="$1" max="$2"
+    [ "${#val}" -le "$max" ] || return 1
+    [[ $val =~ ^[][A-Za-z0-9\ ._,:/\(\)+@%=~*-]*$ ]] || return 1
+    [[ $val != -* && $val != " "* ]] || return 1
+    [[ $val =~ %[^i] || $val == *% ]] && return 1
+    return 0
+}
+
+# Interface name usable as an lldpcli argument (same as ulldpd_ifname_valid())
+valid_ifname() {
+    [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}$ ]]
+}
+
+# Same matching rules as lldpd's interface pattern: "a,b,!c", "!!x" = always allow.
+iface_selected() {
+    local name="$1" patterns="$2" p
+    local denied=0 found=0 pats=()
+    IFS=, read -ra pats <<< "$patterns"
+    # the patterns are globs on purpose (same as lldpd's fnmatch)
+    # shellcheck disable=SC2053
+    for p in "${pats[@]}"; do
+        [ -n "$p" ] || continue
+        if [[ $p == '!!'?* && $name == ${p:2} ]]; then return 0; fi
+        if [[ $p == '!'?* && $name == ${p:1} ]]; then denied=1; found=0
+        elif [ $denied -eq 0 ] && [[ $name == $p ]]; then found=1
+        fi
+    done
+    [ $found -eq 1 ]
+}
+
 # The configuration lives on /boot and is user/web-writable: it is parsed as
 # DATA (whitelisted keys, validated values) and never executed with "source".
 # Invalid values are ignored (the default stays) with a warning.
 load_config() {
-    local line key val
+    local line key val pfield pif
     [ -r "$CONFIG" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line%$'\r'}"
-        [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]] || continue
+        [[ $line =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]] || continue
         key="${BASH_REMATCH[1]}"
         val="${BASH_REMATCH[2]}"
+        pfield=""
         case "$key" in
-            SERVICE|FORCE|CDP|FDP|SONMP|EDP|RXONLY|IFALIAS|IFACES|MGMT_PATTERN|CHASSIS_IFACE|SYSNAME|SYSDESCR|TX_INTERVAL|TX_HOLD) ;;
-            *) continue ;;
+            SERVICE|FORCE|CDP|FDP|SONMP|EDP|RXONLY|IFALIAS|IFACES|MGMT_PATTERN|CHASSIS_IFACE|SYSNAME|SYSDESCR|TX_INTERVAL|TX_HOLD|PORTID_SUBTYPE|PORTID_LOCAL|PORTDESCR|BOND_SRC_MAC|NOTIFY|NOTIFY_LEVEL) ;;
+            *)
+                # per-port key: PORT_(STATUS|ID|DESCR)_<ifname, '.' written as _x2e_>
+                [[ $key =~ ^PORT_(STATUS|ID|DESCR)_([A-Za-z0-9_-]{1,80})$ ]] || continue
+                pfield="${BASH_REMATCH[1]}"
+                pif="${BASH_REMATCH[2]//_x2e_/.}"
+                valid_ifname "$pif" || continue
+                ;;
         esac
         # strip one pair of matching surrounding quotes
         if [[ ${#val} -ge 2 && ( ( $val == \"*\" ) || ( $val == \'*\' ) ) ]]; then
             val="${val:1:${#val}-2}"
         fi
-        if valid_value "$key" "$val"; then
+        if [ -n "$pfield" ]; then
+            if valid_value "PORT_${pfield}_VALUE" "$val"; then
+                if [ -z "${PORT_SEEN[$pif]+x}" ]; then
+                    [ "${#PORT_SEEN[@]}" -lt "$MAX_PORTS" ] || continue
+                    PORT_SEEN[$pif]=1
+                fi
+                case "$pfield" in
+                    STATUS) PORT_STATUS[$pif]="$val" ;;
+                    ID)     PORT_ID[$pif]="$val" ;;
+                    DESCR)  PORT_DESCRIPTION[$pif]="$val" ;;
+                esac
+            else
+                echo "WARNING: ignoring invalid value for $key in $CONFIG." >&2
+            fi
+        elif valid_value "$key" "$val"; then
             printf -v "$key" '%s' "$val"
         else
             echo "WARNING: ignoring invalid value for $key in $CONFIG (using the default)." >&2
         fi
     done < "$CONFIG"
     [ -n "$IFACES" ] || IFACES="eth*"
+    # a global local port ID needs the %i template, otherwise every port would get the same ID
+    if [ "$PORTID_SUBTYPE" == "local" ] && [[ $PORTID_LOCAL != *%i* ]]; then
+        echo "WARNING: PORTID_SUBTYPE=local needs a PORTID_LOCAL containing %i; using the default port ID subtype." >&2
+        PORTID_SUBTYPE="default"
+    fi
 }
 
 # Write /etc/lldpd.d/ulldpd.conf (lldpcli syntax) from the validated values and
@@ -132,6 +220,8 @@ write_lldpd_conf() {
         [ -n "$SYSNAME" ] && echo "configure system hostname \"$SYSNAME\""
         [ -n "$MGMT_PATTERN" ] && echo "configure system ip management pattern \"$MGMT_PATTERN\""
         [ "$IFALIAS" == "enable" ] && echo "configure system interface description"
+        [ "$BOND_SRC_MAC" != "default" ] && echo "configure system bond-slave-src-mac-type $BOND_SRC_MAC"
+        write_port_conf
     } > "$tmp"
     chmod 644 "$tmp"
     mv -f "$tmp" "$GENERATED_CONF" || { rm -f "$tmp"; return 1; }
@@ -144,6 +234,50 @@ write_lldpd_conf() {
             echo "WARNING: $CUSTOM_SRC is not valid (too large, not plain ASCII, or not only configure/unconfigure commands); ignored." >&2
         fi
     fi
+    return 0
+}
+
+# Port ID / description / status commands (validated values only; the interface
+# names come from /sys/class/net and the cfg and match valid_ifname). Written to
+# stdout as lldpcli commands.
+write_port_conf() {
+    local d n if_list=() pif txt id descr count=0
+    case "$PORTID_SUBTYPE" in
+        ifname|macaddress) echo "configure lldp portidsubtype $PORTID_SUBTYPE" ;;
+    esac
+    [ -n "$PORTDESCR" ] && [[ $PORTDESCR != *%i* ]] && echo "configure lldp portdescription \"$PORTDESCR\""
+    # interfaces that exist and are selected by the interface pattern, plus those with explicit settings
+    for d in "$SYSNET"/*; do
+        n="${d##*/}"
+        valid_ifname "$n" || continue
+        iface_selected "$n" "$IFACES" || continue
+        if_list+=("$n")
+        count=$((count + 1))
+        [ $count -ge $MAX_PORTS ] && break
+    done
+    for pif in "${!PORT_STATUS[@]}" "${!PORT_ID[@]}" "${!PORT_DESCRIPTION[@]}"; do
+        [ -e "$SYSNET/$pif" ] || continue
+        [[ " ${if_list[*]} " == *" $pif "* ]] || if_list+=("$pif")
+    done
+    for n in "${if_list[@]}"; do
+        id=""
+        descr=""
+        if [ -n "${PORT_ID[$n]:-}" ]; then
+            id="${PORT_ID[$n]}"
+        elif [ "$PORTID_SUBTYPE" == "local" ]; then
+            id="$PORTID_LOCAL"
+        fi
+        if [ -n "${PORT_DESCRIPTION[$n]:-}" ]; then
+            descr="${PORT_DESCRIPTION[$n]}"
+        elif [ -n "$PORTDESCR" ] && [[ $PORTDESCR == *%i* ]]; then
+            descr="$PORTDESCR"
+        fi
+        # the port ID subtype "local" resets the description, so the description comes second
+        [ -n "$id" ] && echo "configure ports $n lldp portidsubtype local \"${id//%i/$n}\""
+        [ -n "$descr" ] && echo "configure ports $n lldp portdescription \"${descr//%i/$n}\""
+        txt="${PORT_STATUS[$n]:-rx-and-tx}"
+        [ "$txt" != "rx-and-tx" ] && echo "configure ports $n lldp status $txt"
+    done
     return 0
 }
 
@@ -176,11 +310,44 @@ lldpd_running() {
     lldpd_pid >/dev/null
 }
 
+# PID of the running neighbour watcher (pid file + command line identity), empty if none
+watch_pid() {
+    local pid
+    [ -r "$WATCH_PID" ] || return 1
+    pid="$(head -n1 "$WATCH_PID" 2>/dev/null)"
+    [[ $pid =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] || return 1
+    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$WATCH" || return 1
+    echo "$pid"
+}
+
+watch_start() {
+    watch_pid >/dev/null && return 0
+    [ -x "$WATCH" ] && [ -x /usr/bin/php ] || return 0
+    rm -f "$WATCH_PID"
+    setsid "$WATCH" >/dev/null 2>&1 </dev/null &
+    for _ in $(seq 1 10); do
+        watch_pid >/dev/null && return 0
+        sleep 0.2
+    done
+    echo "WARNING: the neighbor watcher did not start." >&2
+    return 0
+}
+
+# stop the watcher and write the pending neighbour history to /boot
+watch_stop() {
+    local pid
+    pid="$(watch_pid)" && kill -TERM "$pid" 2>/dev/null
+    rm -f "$WATCH_PID"
+    [ -f "$POLL" ] && [ -x /usr/bin/php ] && timeout 30 /usr/bin/php -q "$POLL" --reset >/dev/null 2>&1
+    return 0
+}
+
 lldpd_start() {
     local args=() out rc
 
     if lldpd_running; then
         echo "LLDP service is already running (pid $(lldpd_pid))."
+        watch_start
         return 0
     fi
     if [ ! -x "$LLDPD" ]; then
@@ -220,6 +387,7 @@ lldpd_start() {
             [ -s "$out" ] && cat "$out"
             rm -f "$out"
             echo "LLDP service is running (pid $(lldpd_pid))."
+            watch_start
             return 0
         fi
         sleep 0.5
@@ -233,6 +401,7 @@ lldpd_start() {
 
 lldpd_stop() {
     local pid
+    watch_stop
     pid="$(lldpd_pid)"
     if [ -n "$pid" ]; then
         kill -TERM "$pid" 2>/dev/null
@@ -266,9 +435,10 @@ lldpd_restart() {
 }
 
 lldpd_status() {
-    local pid
+    local pid wpid
     if pid="$(lldpd_pid)"; then
         echo "LLDP service is running (pid $pid)."
+        if wpid="$(watch_pid)"; then echo "Neighbor watcher is running (pid $wpid)."; else echo "Neighbor watcher is not running."; fi
         return 0
     fi
     echo "LLDP service is not running."
