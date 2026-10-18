@@ -331,7 +331,7 @@ function ulldpd_neighbor_details(array $n, array $port) {
         $cl = $m['capability'] ?? [];
         if (is_array($cl)) {
             if (isset($cl['type'])) $cl = [$cl];
-            foreach (array_slice($cl, 0, 12) as $c) if (is_array($c) && isset($c['type']) && ulldpd_flag($c['available'])) $caps[] = ulldpd_dstr($c['type'], 24);
+            foreach (array_slice($cl, 0, 12) as $c) if (is_array($c) && isset($c['type']) && ulldpd_flag($c['available'] ?? false)) $caps[] = ulldpd_dstr($c['type'], 24);
         }
         $inv = [];
         if (isset($m['inventory']) && is_array($m['inventory'])) {
