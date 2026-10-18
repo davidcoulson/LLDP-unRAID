@@ -3,15 +3,15 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "ulldpd">
 <!ENTITY author    "davidcoulson">
-<!ENTITY version   "2026.10.19">
+<!ENTITY version   "2026.10.20">
 <!ENTITY launch    "Settings/ULLDPDsettings">
 <!ENTITY gitURL    "https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main">
 <!ENTITY pluginURL "&gitURL;/plugin/&name;.plg">
 <!ENTITY pkgURL    "&gitURL;/packages">
 <!ENTITY plgPATH   "/boot/config/plugins/&name;">
-<!ENTITY plgNAME   "ulldpd-2026.10.19-x86_64-1">
-<!ENTITY plgMD5    "052d653b0e31ed53a08e5abd37786b91">
-<!ENTITY plgSHA256 "1f51712d5976727c510de6b89da70bbaee4f8b35f69b2d185bddb228dea7a313">
+<!ENTITY plgNAME   "ulldpd-2026.10.20-x86_64-1">
+<!ENTITY plgMD5    "676198c821214a7f142325e287dc3559">
+<!ENTITY plgSHA256 "7c5505c03c2675702bace5faac9a4c6ddf1db7c3d1708db95ce26abc9d31eeb2">
 <!ENTITY lldpdNAME "lldpd-1.0.22-x86_64-1">
 <!ENTITY lldpdMD5  "09d7c96070494afdeb31e5d0629200c4">
 <!ENTITY lldpdSHA256 "d31e863c54b527f09ca10595b1edb24d4af907ce29a7eb1b03c490a2fc01896c">
@@ -22,6 +22,13 @@
 
 <CHANGES>
 ## LLDP for UNRAID
+###2026.10.20
+- new: Ports table on the settings page: the physical NICs and bonds matching the interface pattern with link state/speed/MTU, bond membership (master/slave, mode, LACP state) and a per-port LLDP status (rx-and-tx, rx-only, tx-only, disabled)
+- new: port ID subtype (default, ifname, macaddress, local), port description and bond slave source MAC settings, with per-port overrides of the port ID (local) and port description; `%i` in the texts is replaced by the interface name
+- new: neighbor table: bond/LACP info per interface and an expandable details row (remote capabilities, PVID, VLANs, max frame size, PMD autoneg and MAU type, link aggregation, PoE, LLDP-MED); mismatches between the remote max frame size and the local MTU, or between the remote and local link speed, are highlighted
+- new: neighbor watcher (started and stopped with the service) that records neighbor changes (added, removed, changed) in a history (/boot/config/plugins/ulldpd/history.json, written only on change) and optionally sends Unraid notifications (off by default, importance normal or warning, rate limited); the page shows "previously on ..." for changed neighbors and a "Recent neighbor changes" table with a Clear button
+- not supported by lldpd 1.0.22 and therefore not offered: a different management address or management VLAN per port (the management address pattern is global), the "ifalias" port ID subtype, per-port ifname/macaddress subtypes
+- security: all new settings are whitelisted and validated in both rc.lldpd and PHP (texts: no quotes/newlines/leading dash, only %i as template); interface names are validated before they are passed to lldpcli as separate arguments; the new endpoint is POST + CSRF only; notification texts are reduced to a plain ASCII subset and passed to notify as arguments, never through a shell
 ###2026.10.19
 - change: removed the introductory LLDP description text from the settings page
 
@@ -167,6 +174,7 @@ removepkg lldpd
 rm -f &plgPATH;/*.txz &plgPATH;/*.md5 &plgPATH;/*.sha256
 rm -rf &emhttp;
 rm -rf /run/lldpd /run/lldpd.pid /run/lldpd.socket
+rm -f /run/ulldpd-watch.pid /run/ulldpd-state.json /run/ulldpd-state.lock
 
 echo ""
 echo "-----------------------------------------------------------"
