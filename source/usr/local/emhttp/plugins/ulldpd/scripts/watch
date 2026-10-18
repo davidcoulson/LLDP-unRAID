@@ -1,0 +1,17 @@
+#!/bin/bash
+#
+# LLDP neighbour watcher (started and stopped by /etc/rc.d/rc.lldpd).
+# Runs include/poll.php every few seconds: it records neighbour changes in the
+# history and sends Unraid notifications if enabled. Runs as root, takes no input.
+#
+POLL="/usr/local/emhttp/plugins/ulldpd/include/poll.php"
+PIDFILE="/run/ulldpd-watch.pid"
+INTERVAL=5
+
+echo $$ > "$PIDFILE"
+trap 'kill "$!" 2>/dev/null; rm -f "$PIDFILE"; exit 0' TERM INT
+while :; do
+    /usr/bin/php -q "$POLL" >/dev/null 2>&1
+    sleep "$INTERVAL" &
+    wait $!
+done
