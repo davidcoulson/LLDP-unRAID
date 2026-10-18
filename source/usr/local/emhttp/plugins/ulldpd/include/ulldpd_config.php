@@ -284,7 +284,17 @@ function ulldpd_flag($v) {
 function ulldpd_neighbor_details(array $n, array $port) {
     $d = [];
     $d['mfs'] = ulldpd_dstr($port['mfs'] ?? '', 16);
-    $d['aggregation'] = ulldpd_dstr($port['aggregation'] ?? '', 16);
+    /* lldpcli JSON: "aggregation" is an object (status/enabled, id); accept a scalar id too */
+    $ag = $port['aggregation'] ?? '';
+    $d['aggregation'] = '';
+    if (is_array($ag)) {
+        $st = $ag['status'] ?? ($ag['enabled'] ?? ($ag['supported'] ?? false));
+        $id = $ag['id'] ?? ($ag['value'] ?? '');
+        $id = is_scalar($id) ? preg_replace('/[^0-9]/', '', (string)$id) : '';
+        if (ulldpd_flag($st) || $id !== '') $d['aggregation'] = ($id !== '' ? substr($id, 0, 10) : 'yes');
+    } elseif (is_scalar($ag)) {
+        $d['aggregation'] = substr(preg_replace('/[^0-9]/', '', (string)$ag), 0, 10);
+    }
     $an = (isset($port['auto-negotiation']) && is_array($port['auto-negotiation'])) ? $port['auto-negotiation'] : null;
     $d['autoneg'] = null;
     if ($an !== null) {
@@ -321,7 +331,7 @@ function ulldpd_neighbor_details(array $n, array $port) {
         $cl = $m['capability'] ?? [];
         if (is_array($cl)) {
             if (isset($cl['type'])) $cl = [$cl];
-            foreach (array_slice($cl, 0, 12) as $c) if (is_array($c) && isset($c['type']) && !empty($c['available'])) $caps[] = ulldpd_dstr($c['type'], 24);
+            foreach (array_slice($cl, 0, 12) as $c) if (is_array($c) && isset($c['type']) && ulldpd_flag($c['available'])) $caps[] = ulldpd_dstr($c['type'], 24);
         }
         $inv = [];
         if (isset($m['inventory']) && is_array($m['inventory'])) {
@@ -427,7 +437,7 @@ function ulldpd_detail_html(array $r, array $warnings) {
             . ($a['advertised'] ? ', advertised ' . implode(' ', $a['advertised']) : '')));
         $h .= ulldpd_detail_line('MAU type', ulldpd_h($a['current']));
     }
-    $h .= ulldpd_detail_line('Link aggregation', $d['aggregation'] !== '' ? ulldpd_h('aggregated, ID ' . $d['aggregation']) : '');
+    $h .= ulldpd_detail_line('Link aggregation', $d['aggregation'] !== '' ? ulldpd_h($d['aggregation'] === 'yes' ? 'aggregated' : 'aggregated, ID ' . $d['aggregation']) : '');
     if ($d['power'] !== null) {
         $p = $d['power'];
         $h .= ulldpd_detail_line('PoE', ulldpd_h(($p['type'] !== '' ? $p['type'] : 'unknown') . ', supported ' . ($p['supported'] ? 'yes' : 'no') . ', enabled ' . ($p['enabled'] ? 'yes' : 'no')

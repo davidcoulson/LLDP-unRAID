@@ -9,8 +9,10 @@
 /* Same matching rules as lldpd's interface pattern ("eth*,!eth2", "!!" = always allow). */
 function ulldpd_iface_selected($name, $patterns) {
     $denied = false;
-    $found = false;
-    foreach (explode(',', (string)$patterns) as $p) {
+    $list = explode(',', (string)$patterns);
+    $found = true; /* exclusion-only lists ("!eth2") match everything else */
+    foreach ($list as $p) if ($p !== '' && $p[0] !== '!') { $found = false; break; }
+    foreach ($list as $p) {
         if ($p === '') continue;
         if (strlen($p) >= 2 && $p[0] === '!' && $p[1] === '!' && fnmatch(substr($p, 2), $name)) return true;
         if ($p[0] === '!' && fnmatch(substr($p, 1), $name)) { $denied = true; $found = false; }
@@ -131,7 +133,7 @@ function ulldpd_lacp_state(array $b, $if) {
     $sl = $b['slaves'][$if] ?? null;
     if (!$sl) return 'LACP state unknown';
     $ok = ($sl['mii'] === 'up') && ($sl['agg'] !== '') && ($sl['agg'] === $b['agg'])
-        && (($sl['churn'] ?? '') === 'none' || ($sl['churn'] ?? '') === '');
+        && ($sl['churn'] ?? '') === 'none' && ($sl['pchurn'] ?? '') === 'none';
     $s = $ok ? 'LACP ok' : 'LACP not in sync';
     if ($sl['agg'] !== '') $s .= ' (aggregator ' . $sl['agg'] . ($sl['agg'] !== $b['agg'] ? ', active is ' . $b['agg'] : '') . ')';
     if ($sl['mii'] !== '' && $sl['mii'] !== 'up') $s .= ', link ' . $sl['mii'];

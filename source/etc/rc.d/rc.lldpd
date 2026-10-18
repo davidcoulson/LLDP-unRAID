@@ -138,8 +138,12 @@ valid_ifname() {
 # Same matching rules as lldpd's interface pattern: "a,b,!c", "!!x" = always allow.
 iface_selected() {
     local name="$1" patterns="$2" p
-    local denied=0 found=0 pats=()
+    local denied=0 found=1 pats=()
     IFS=, read -ra pats <<< "$patterns"
+    # exclusion-only lists ("!eth2") match everything else
+    for p in "${pats[@]}"; do
+        if [ -n "$p" ] && [[ $p != '!'* ]]; then found=0; break; fi
+    done
     # the patterns are globs on purpose (same as lldpd's fnmatch)
     # shellcheck disable=SC2053
     for p in "${pats[@]}"; do

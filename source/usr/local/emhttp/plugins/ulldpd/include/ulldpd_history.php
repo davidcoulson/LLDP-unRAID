@@ -16,6 +16,7 @@ const ULLDPD_RL_WINDOW     = 600;    /* notification rate limit: max ULLDPD_RL_M
 const ULLDPD_RL_MAX        = 5;
 const ULLDPD_RL_SPACING    = 120;    /* ... and at most one per interface+kind in this many seconds */
 const ULLDPD_STARTUP       = 90;     /* seconds after the watcher start during which an empty history is learned silently */
+const ULLDPD_MAX_NEIGHBORS = 64;     /* tracked neighbours in total */
 const ULLDPD_BOOT_INTERVAL = 60;     /* minimum seconds between two flash writes */
 
 /* bounded plain string: valid UTF-8, no control characters */
@@ -32,6 +33,7 @@ function ulldpd_hist_int($v) {
 
 function ulldpd_hist_entry($e) {
     return [
+        'if'        => is_string($e['if'] ?? null) && ulldpd_ifname_valid($e['if']) ? $e['if'] : '',
         'name'      => ulldpd_hist_str($e['name'] ?? ''),
         'chassis'   => ulldpd_hist_str($e['chassis'] ?? ''),
         'port'      => ulldpd_hist_str($e['port'] ?? ''),
@@ -42,20 +44,38 @@ function ulldpd_hist_entry($e) {
     ];
 }
 
+/* Stable identity of a tracked neighbour: interface + chassis ID + port ID. */
+function ulldpd_nkey(array $e) {
+    return $e['if'] . '|' . substr(sha1($e['chassis'] . "\0" . $e['port']), 0, 12);
+}
+
+function ulldpd_nkey_valid($k) {
+    return is_string($k) && strlen($k) <= 100 && preg_match('/\A[^|]{1,80}\|[0-9a-f]{12}\z/', $k);
+}
+
 function ulldpd_hist_empty() {
     return ['v' => 1, 'neighbors' => [], 'previous' => [], 'events' => [],
-            'meta' => ['seeded' => false, 'start' => 0, 'learn' => false, 'dirty' => false, 'boot_written' => 0, 'absent' => [],
-                       'rl' => ['win' => 0, 'sent' => 0, 'supp' => 0, 'last' => []]]];
+            'meta' => ['seeded' => false, 'start' => 0, 'learn' => false, 'dirty' => false, 'boot_written' => 0, 'hold_until' => 0, 'absent' => [],
+                       'rl' => ['win' => 0, 'sent' => 0, 'supp' => 0, 'pend' => 0, 'last' => []]]];
 }
 
 /* Validate decoded JSON into a clean state (anything unexpected is dropped). */
 function ulldpd_hist_clean($raw) {
     $s = ulldpd_hist_empty();
     if (!is_array($raw)) return $s;
-    foreach (['neighbors', 'previous'] as $k) {
-        if (!isset($raw[$k]) || !is_array($raw[$k])) continue;
-        foreach (array_slice($raw[$k], 0, ULLDPD_MAX_PORTS, true) as $if => $e) {
-            if (is_string($if) && ulldpd_ifname_valid($if) && is_array($e)) $s[$k][$if] = ulldpd_hist_entry($e);
+    if (isset($raw['previous']) && is_array($raw['previous'])) {
+        foreach (array_slice($raw['previous'], 0, ULLDPD_MAX_PORTS, true) as $if => $e) {
+            if (is_string($if) && ulldpd_ifname_valid($if) && is_array($e)) { $e['if'] = $if; $s['previous'][$if] = ulldpd_hist_entry($e); }
+        }
+    }
+    if (isset($raw['neighbors']) && is_array($raw['neighbors'])) {
+        foreach (array_slice($raw['neighbors'], 0, ULLDPD_MAX_NEIGHBORS, true) as $k => $e) {
+            if (!is_array($e)) continue;
+            /* older files were keyed by the plain interface name */
+            if (is_string($k) && ulldpd_ifname_valid($k)) $e['if'] = $k;
+            $en = ulldpd_hist_entry($e);
+            if ($en['if'] === '') continue;
+            $s['neighbors'][ulldpd_nkey($en)] = $en;
         }
     }
     if (isset($raw['events']) && is_array($raw['events'])) {
@@ -74,16 +94,18 @@ function ulldpd_hist_clean($raw) {
         $s['meta']['seeded'] = !empty($m['seeded']);
         $s['meta']['dirty'] = !empty($m['dirty']);
         $s['meta']['start'] = ulldpd_hist_int($m['start'] ?? 0);
+        $s['meta']['hold_until'] = ulldpd_hist_int($m['hold_until'] ?? 0);
         $s['meta']['learn'] = !empty($m['learn']);
         $s['meta']['boot_written'] = ulldpd_hist_int($m['boot_written'] ?? 0);
         if (isset($m['absent']) && is_array($m['absent'])) {
-            foreach (array_slice($m['absent'], 0, ULLDPD_MAX_PORTS, true) as $if => $t) if (is_string($if) && ulldpd_ifname_valid($if)) $s['meta']['absent'][$if] = ulldpd_hist_int($t);
+            foreach (array_slice($m['absent'], 0, ULLDPD_MAX_NEIGHBORS, true) as $k => $t) if (ulldpd_nkey_valid($k)) $s['meta']['absent'][$k] = ulldpd_hist_int($t);
         }
         if (isset($m['rl']) && is_array($m['rl'])) {
             $rl = $m['rl'];
             $s['meta']['rl']['win'] = ulldpd_hist_int($rl['win'] ?? 0);
             $s['meta']['rl']['sent'] = min(1000, ulldpd_hist_int($rl['sent'] ?? 0));
             $s['meta']['rl']['supp'] = min(100000, ulldpd_hist_int($rl['supp'] ?? 0));
+            $s['meta']['rl']['pend'] = min(100000, ulldpd_hist_int($rl['pend'] ?? 0));
             if (isset($rl['last']) && is_array($rl['last'])) {
                 foreach (array_slice($rl['last'], 0, 200, true) as $k => $t) if (is_string($k) && strlen($k) <= 40) $s['meta']['rl']['last'][$k] = ulldpd_hist_int($t);
             }
@@ -140,13 +162,16 @@ function ulldpd_lock() {
     return $fh;
 }
 
-/* First neighbour of every interface as history entries: if => entry */
+/* Every neighbour as a history entry: identity key => entry (identity = interface + chassis ID + port ID) */
 function ulldpd_current_map(array $rows) {
     $cur = [];
     foreach ($rows as $r) {
-        if (!ulldpd_ifname_valid($r['iface']) || isset($cur[$r['iface']])) continue;
-        $cur[$r['iface']] = ulldpd_hist_entry(['name' => $r['name'], 'chassis' => $r['chassis'], 'port' => $r['port'], 'portdescr' => $r['portdescr']]);
-        if (count($cur) >= ULLDPD_MAX_PORTS) break;
+        if (!ulldpd_ifname_valid($r['iface'])) continue;
+        $e = ulldpd_hist_entry(['if' => $r['iface'], 'name' => $r['name'], 'chassis' => $r['chassis'], 'port' => $r['port'], 'portdescr' => $r['portdescr']]);
+        $k = ulldpd_nkey($e);
+        if (isset($cur[$k])) continue;
+        $cur[$k] = $e;
+        if (count($cur) >= ULLDPD_MAX_NEIGHBORS) break;
     }
     return $cur;
 }
@@ -160,47 +185,74 @@ function ulldpd_event_add(array &$s, $now, $if, $kind, array $new, array $old) {
     return $ev;
 }
 
-/* Compare the current neighbours with the state and update it. Returns the new events. */
-function ulldpd_poll_step(array &$s, array $cur, $now, $grace = ULLDPD_GRACE) {
+/* Compare the current neighbours (identity key => entry) with the state and update it.
+ * $hold: seconds after a restart (baseline loaded from /boot) during which missing neighbours are not yet
+ * counted as absent, so slowly advertising neighbours are not reported removed and added. */
+function ulldpd_poll_step(array &$s, array $cur, $now, $grace = ULLDPD_GRACE, $hold = ULLDPD_STARTUP) {
     $events = [];
     $baseline = empty($s['meta']['seeded']);
     if ($baseline) {
         $s['meta']['start'] = $now;
         $s['meta']['learn'] = !$s['neighbors'] && !$s['events'] && !$s['previous'];
+        $s['meta']['hold_until'] = $s['neighbors'] ? $now + $hold : 0;
+        $s['meta']['absent'] = [];
     }
     /* first ever run / after Clear: learn the neighbours that show up while the service is still starting */
     $silent = !empty($s['meta']['learn']) && !$s['events'] && !$s['previous'] && $now - $s['meta']['start'] < ULLDPD_STARTUP;
-    foreach ($cur as $if => $e) {
-        unset($s['meta']['absent'][$if]);
-        $old = $s['neighbors'][$if] ?? null;
-        if ($old === null) {
+    $holding = $now < ($s['meta']['hold_until'] ?? 0);
+
+    $new = []; $missing = [];
+    foreach ($cur as $k => $e) {
+        unset($s['meta']['absent'][$k]);
+        $old = $s['neighbors'][$k] ?? null;
+        if ($old === null) { $new[$e['if']][$k] = $e; continue; }
+        if ($old['name'] !== $e['name']) {
+            $prev = $old; $prev['until'] = $now;
+            $s['previous'][$e['if']] = $prev;
+            $e['first'] = $old['first'] ?: $now;
+            $e['last'] = $now;
+            $s['neighbors'][$k] = $e;
+            $events[] = ulldpd_event_add($s, $now, $e['if'], 'changed', $e, $old);
+        } else {
+            $s['neighbors'][$k]['last'] = $now;
+            $s['neighbors'][$k]['portdescr'] = $e['portdescr'];
+        }
+    }
+    foreach ($s['neighbors'] as $k => $old) if (!isset($cur[$k])) $missing[$old['if']][] = $k;
+
+    foreach ($new as $if => $list) {
+        /* exactly one neighbour replaced by exactly one other on the same interface: a change */
+        if (!$holding && count($list) === 1 && isset($missing[$if]) && count($missing[$if]) === 1) {
+            $k = key($list); $e = $list[$k]; $ok = $missing[$if][0]; $old = $s['neighbors'][$ok];
+            $prev = $old; $prev['until'] = $now;
+            $s['previous'][$if] = $prev;
+            unset($s['neighbors'][$ok], $s['meta']['absent'][$ok], $missing[$if]);
             $e['first'] = $e['last'] = $now;
-            $s['neighbors'][$if] = $e;
+            $s['neighbors'][$k] = $e;
+            $events[] = ulldpd_event_add($s, $now, $if, 'changed', $e, $old);
+            continue;
+        }
+        foreach ($list as $k => $e) {
+            $e['first'] = $e['last'] = $now;
+            $s['neighbors'][$k] = $e;
             $s['meta']['dirty'] = true;
             if (!$silent) $events[] = ulldpd_event_add($s, $now, $if, 'added', $e, []);
-        } elseif ($old['chassis'] !== $e['chassis'] || $old['name'] !== $e['name'] || $old['port'] !== $e['port']) {
-            $prev = $old; $prev['until'] = $now;
-            $s['previous'][$if] = $prev;
-            $e['first'] = ($old['chassis'] === $e['chassis']) ? ($old['first'] ?: $now) : $now;
-            $e['last'] = $now;
-            $s['neighbors'][$if] = $e;
-            $events[] = ulldpd_event_add($s, $now, $if, 'changed', $e, $old);
-        } else {
-            $s['neighbors'][$if]['last'] = $now;
-            $s['neighbors'][$if]['portdescr'] = $e['portdescr'];
         }
     }
-    foreach ($s['neighbors'] as $if => $old) {
-        if (isset($cur[$if])) continue;
-        if (!isset($s['meta']['absent'][$if])) $s['meta']['absent'][$if] = $now;
-        if ($now - $s['meta']['absent'][$if] >= $grace) {
-            $prev = $old; $prev['until'] = $now;
-            $s['previous'][$if] = $prev;
-            unset($s['neighbors'][$if], $s['meta']['absent'][$if]);
-            $events[] = ulldpd_event_add($s, $now, $if, 'removed', [], $old);
+    if (!$holding) {
+        foreach ($missing as $if => $keys) foreach ($keys as $k) {
+            if (!isset($s['neighbors'][$k])) continue;
+            $old = $s['neighbors'][$k];
+            if (!isset($s['meta']['absent'][$k])) $s['meta']['absent'][$k] = $now;
+            if ($now - $s['meta']['absent'][$k] >= $grace) {
+                $prev = $old; $prev['until'] = $now;
+                $s['previous'][$if] = $prev;
+                unset($s['neighbors'][$k], $s['meta']['absent'][$k]);
+                $events[] = ulldpd_event_add($s, $now, $if, 'removed', [], $old);
+            }
         }
     }
-    foreach (array_keys($s['meta']['absent']) as $if) if (!isset($s['neighbors'][$if])) unset($s['meta']['absent'][$if]);
+    foreach (array_keys($s['meta']['absent']) as $k) if (!isset($s['neighbors'][$k])) unset($s['meta']['absent'][$k]);
     $s['meta']['seeded'] = true;
     return $events;
 }
@@ -226,34 +278,51 @@ function ulldpd_event_text(array $ev) {
     return ["LLDP neighbor changed on $if", 'was ' . $nb($ev['old_name'], $ev['old_port']) . ', now ' . $nb($ev['name'], $ev['port'])];
 }
 
-/* Rate limiter: true if one more notification for $key may be sent now (and counts it). */
+/* Rate limiter, step 1: may one more notification for $key be sent now? (counts a suppression if not) */
 function ulldpd_rl_allow(array &$s, $now, $key) {
     $rl =& $s['meta']['rl'];
-    if ($now - $rl['win'] >= ULLDPD_RL_WINDOW || $rl['win'] > $now) { $rl['win'] = $now; $rl['sent'] = 0; }
+    if ($now - $rl['win'] >= ULLDPD_RL_WINDOW || $rl['win'] > $now) {
+        /* new window: what was suppressed in the old one is reported by ulldpd_rl_summary() */
+        $rl['pend'] = min(100000, $rl['pend'] + $rl['supp']);
+        $rl['supp'] = 0; $rl['win'] = $now; $rl['sent'] = 0;
+    }
     $key = substr($key, 0, 40);
     if ($rl['sent'] >= ULLDPD_RL_MAX || (isset($rl['last'][$key]) && $now - $rl['last'][$key] < ULLDPD_RL_SPACING)) { $rl['supp']++; return false; }
-    $rl['sent']++;
-    $rl['last'][$key] = $now;
-    foreach ($rl['last'] as $k => $t) if ($now - $t > 2 * ULLDPD_RL_WINDOW) unset($rl['last'][$k]);
     return true;
 }
 
-/* Send an Unraid notification (argv, no shell). */
-function ulldpd_notify_send($level, $subject, $desc) {
+/* step 2: call only after the notification was really delivered */
+function ulldpd_rl_commit(array &$s, $now, $key) {
+    $rl =& $s['meta']['rl'];
+    $rl['sent']++;
+    $rl['last'][substr($key, 0, 40)] = $now;
+    foreach ($rl['last'] as $k => $t) if ($now - $t > 2 * ULLDPD_RL_WINDOW) unset($rl['last'][$k]);
+}
+
+/* A delivery failed: it counts as suppressed so that it shows up in the summary. */
+function ulldpd_rl_failed(array &$s) {
+    $s['meta']['rl']['supp']++;
+}
+
+/* Send an Unraid notification (argv, no shell). Unraid names the archive file after event + current second and
+ * skips it if it exists, so every call gets a distinct event name ($uniq). */
+function ulldpd_notify_send($level, $subject, $desc, $uniq = '') {
     if (!is_executable(ULLDPD_NOTIFY)) return false;
     if (!in_array($level, ['normal', 'warning'], true)) $level = 'normal';
-    list($rc) = ulldpd_run([ULLDPD_NOTIFY, '-e', 'LLDP', '-s', $subject, '-d', $desc, '-i', $level, '-l', '/Settings/ULLDPDsettings', 'add'], 15);
+    $event = 'LLDP' . ($uniq !== '' ? ' ' . preg_replace('/[^A-Za-z0-9._ -]/', '', $uniq) : '');
+    list($rc) = ulldpd_run([ULLDPD_NOTIFY, '-e', $event, '-s', $subject, '-d', $desc, '-i', $level, '-l', '/Settings/ULLDPDsettings', 'add'], 15);
     return $rc === 0;
 }
 
-/* Summary of notifications that were suppressed in a finished window (sent once the window ended). */
+/* Summary of suppressed notifications: those of an earlier window, or of the current one once it has ended. */
 function ulldpd_rl_summary(array &$s, $now, $level, $send) {
     $rl =& $s['meta']['rl'];
-    if ($rl['supp'] > 0 && $now - $rl['win'] >= ULLDPD_RL_WINDOW) {
-        $n = $rl['supp'];
-        $rl['supp'] = 0; $rl['win'] = $now; $rl['sent'] = 1;
-        $send($level, 'LLDP neighbor events suppressed', "$n further neighbor events were not notified (rate limit); see the LLDP settings page");
-    }
+    $n = $rl['pend'] + ($now - $rl['win'] >= ULLDPD_RL_WINDOW ? $rl['supp'] : 0);
+    if ($n <= 0) return;
+    if ($now - $rl['win'] >= ULLDPD_RL_WINDOW) { $rl['supp'] = 0; $rl['win'] = $now; $rl['sent'] = 0; }
+    $rl['pend'] = 0;
+    if ($send($level, 'LLDP neighbor events suppressed', "$n further neighbor events were not notified (rate limit); see the LLDP settings page", 'summary')) $rl['sent']++;
+    else $rl['pend'] = $n;
 }
 
 /* ---- HTML ---- */
@@ -266,8 +335,9 @@ function ulldpd_time_h($t) {
 function ulldpd_previous_html(array $state, array $row) {
     $p = $state['previous'][$row['iface']] ?? null;
     if (!$p) return '';
-    $cur = $state['neighbors'][$row['iface']] ?? null;
-    if ($cur && $cur['chassis'] === $p['chassis'] && $cur['port'] === $p['port'] && $cur['name'] === $p['name']) return '';
+    foreach ($state['neighbors'] as $cur) {
+        if ($cur['if'] === $row['iface'] && $cur['chassis'] === $p['chassis'] && $cur['port'] === $p['port'] && $cur['name'] === $p['name']) return '';
+    }
     $what = ($p['name'] !== '' ? $p['name'] : $p['chassis']) . ($p['port'] !== '' ? ' / ' . $p['port'] : '');
     return '<br><small class="orange-text" title="Neighbor history">previously on ' . ulldpd_h($row['iface']) . ': ' . ulldpd_h($what)
         . ($p['until'] ? ' (until ' . ulldpd_time_h($p['until']) . ')' : '') . '</small>';

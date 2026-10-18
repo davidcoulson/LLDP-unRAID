@@ -33,14 +33,18 @@ $rows = ulldpd_neighbors_result();
 if ($rows === null) exit(0);                      /* lldpcli failed: keep the state */
 
 $cfg = ulldpd_load_cfg();
-$events = ulldpd_poll_step($state, ulldpd_current_map($rows), $now, $grace);
+/* after a restart, wait at least one full neighbour TTL (tx interval x hold) before counting absences */
+$hold = max(ULLDPD_STARTUP, min(7200, (int)$cfg['TX_INTERVAL'] * (int)$cfg['TX_HOLD']));
+$events = ulldpd_poll_step($state, ulldpd_current_map($rows), $now, $grace, $hold);
 
 if ($cfg['NOTIFY'] === 'enable') {
-    $send = function ($level, $subject, $desc) { return ulldpd_notify_send($level, $subject, $desc); };
-    foreach ($events as $ev) {
-        if (!ulldpd_rl_allow($state, $now, $ev['if'] . '|' . $ev['kind'])) continue;
+    $send = function ($level, $subject, $desc, $uniq = '') { return ulldpd_notify_send($level, $subject, $desc, $uniq); };
+    foreach ($events as $i => $ev) {
+        $key = $ev['if'] . '|' . $ev['kind'];
+        if (!ulldpd_rl_allow($state, $now, $key)) continue;
         list($subject, $desc) = ulldpd_event_text($ev);
-        $send($cfg['NOTIFY_LEVEL'], $subject, $desc);
+        if ($send($cfg['NOTIFY_LEVEL'], $subject, $desc, $now . '-' . $i)) ulldpd_rl_commit($state, $now, $key);
+        else ulldpd_rl_failed($state);
     }
     ulldpd_rl_summary($state, $now, $cfg['NOTIFY_LEVEL'], $send);
 }
