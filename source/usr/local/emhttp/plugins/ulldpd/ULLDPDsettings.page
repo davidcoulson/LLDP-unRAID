@@ -26,6 +26,7 @@ Markdown="false"
  */
 require_once '/usr/local/emhttp/plugins/ulldpd/include/ulldpd_config.php';
 $ulldpd_snap = ulldpd_snapshot();
+list($ulldpd_hist) = ulldpd_state_load();
 $ulldpd_csrf = isset($var['csrf_token']) ? htmlspecialchars($var['csrf_token'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '';
 $ulldpd_custom = '';
 if (is_readable(ULLDPD_CUSTOM_FILE) && filesize(ULLDPD_CUSTOM_FILE) <= ULLDPD_CUSTOM_MAX) {
@@ -36,6 +37,12 @@ function ulldpd_sel($cfg, $key, $label, $help) {
     echo "<dl><dt>" . $label . ":</dt><dd><select id=\"$key\" name=\"$key\" size=\"1\">"
        . mk_option($v, 'disable', 'No') . mk_option($v, 'enable', 'Yes')
        . "</select></dd></dl>\n<blockquote class=\"inline_help\">" . $help . "</blockquote>\n";
+}
+function ulldpd_enum($cfg, $key, $label, $help, array $options) {
+    $v = $cfg[$key];
+    echo "<dl><dt>" . $label . ":</dt><dd><select id=\"$key\" name=\"$key\" size=\"1\">";
+    foreach ($options as $val => $text) echo mk_option($v, $val, $text);
+    echo "</select></dd></dl>\n<blockquote class=\"inline_help\">" . $help . "</blockquote>\n";
 }
 function ulldpd_txt($cfg, $key, $label, $help, $pattern, $max, $placeholder = '') {
     echo "<dl><dt>" . $label . ":</dt><dd><input type=\"text\" id=\"$key\" name=\"$key\" class=\"narrow\" style=\"width:30em\" maxlength=\"$max\" pattern=\""
@@ -53,7 +60,10 @@ function ulldpd_txt($cfg, $key, $label, $help, $pattern, $max, $placeholder = ''
 
 <div id="ulldpd-neighbors-box">
 <table class="unraid tablesorter"><thead><tr><th>LLDP Neighbors</th></tr></thead></table>
-<div id="ulldpd-neighbors"><?=$ulldpd_snap['running'] ? ulldpd_neighbors_html($ulldpd_snap['rows']) : '<em>The LLDP service is not running.</em>';?></div>
+<div id="ulldpd-neighbors"><?=$ulldpd_snap['running'] ? ulldpd_neighbors_html($ulldpd_snap['rows'], $ulldpd_hist) : '<em>The LLDP service is not running.</em>';?></div>
+<table class="unraid tablesorter"><thead><tr><th>Recent neighbor changes</th></tr></thead></table>
+<div id="ulldpd-history"><?=ulldpd_history_html($ulldpd_hist);?></div>
+<p><input type="button" id="ulldpd-history-clear" value="Clear history"> <span id="ulldpd-history-msg"></span></p>
 <table class="unraid tablesorter"><thead><tr><th>Local Chassis (propagated information)</th></tr></thead></table>
 <div id="ulldpd-chassis"><?=$ulldpd_snap['running'] ? ulldpd_chassis_html($ulldpd_snap['chassis']) : '<em>The LLDP service is not running.</em>';?></div>
 <p><input type="button" id="ulldpd-refresh" value="Refresh"> <small>Updates automatically every 10 seconds.</small></p>
@@ -102,9 +112,26 @@ function ulldpd_txt($cfg, $key, $label, $help, $pattern, $max, $placeholder = ''
     ulldpd_txt($ulldpd_cfg, 'CHASSIS_IFACE', 'Interface for Chassis ID', '<p>Interface (or pattern) whose MAC address is used to compute the chassis ID advertised to neighbors. Leave empty for the default. Same allowed characters as the interface pattern.</p>', '[A-Za-z0-9_.*,!\-]{0,128}', 128, 'eth0');
     ulldpd_txt($ulldpd_cfg, 'SYSNAME', 'System Name Override', '<p>Name advertised to neighbors instead of the server\'s hostname. Letters, digits, <code>. _ -</code>, up to 63 characters. Leave empty to use the hostname.</p>', '[A-Za-z0-9._\-]{0,63}', 63, '');
     ulldpd_txt($ulldpd_cfg, 'SYSDESCR', 'System Description Override', '<p>Description advertised to neighbors instead of the default (Unraid version and kernel). Printable text up to 200 characters; quotes, backslashes, <code>$ ` ; # | &amp; &lt; &gt;</code> and line breaks are not allowed. Leave empty for the default.</p>', '[A-Za-z0-9 ._,:\/\(\)+@%=~*\[\]\-]{0,200}', 200, '');
+    ulldpd_enum($ulldpd_cfg, 'PORTID_SUBTYPE', 'Port ID Subtype', '<p>What this server advertises as its port ID on every port. <strong>Default</strong> lets lldpd choose (the interface MAC address, or the interface name when an interface description is set). <strong>ifname</strong> = interface name (eth0), <strong>macaddress</strong> = the interface MAC address, <strong>local</strong> = the text below (it must contain <code>%i</code>, which becomes the interface name, so every port gets a different ID). A per-port override can be set in the Ports table. lldpd 1.0.22 has no &quot;interface alias&quot; subtype, and only <em>local</em> can be set for a single port.</p>', ['default' => 'Default', 'ifname' => 'ifname (interface name)', 'macaddress' => 'macaddress', 'local' => 'local (text below)']);
+    ulldpd_txt($ulldpd_cfg, 'PORTID_LOCAL', 'Local Port ID Text', '<p>Used when the port ID subtype is <strong>local</strong>, e.g. <code>unraid-%i</code>. Letters, digits and <code>space . _ , : / ( ) + @ = ~ * [ ] -</code>, up to 64 characters; <code>%i</code> is the only allowed <code>%</code> sequence; must not start with <code>-</code> or a space; no quotes or line breaks.</p>', '[A-Za-z0-9 ._,:\/()+@%=~*\[\]\-]{0,64}', 64, 'unraid-%i');
+    ulldpd_txt($ulldpd_cfg, 'PORTDESCR', 'Port Description', '<p>Port description advertised on every port instead of the default (the interface name). <code>%i</code> is replaced by the interface name, e.g. <code>Unraid %i</code>. Same allowed characters as the local port ID text, up to 100 characters. Leave empty for the default. Can be overridden per port in the Ports table.</p>', '[A-Za-z0-9 ._,:\/()+@%=~*\[\]\-]{0,100}', 100, 'Unraid %i');
+    ulldpd_enum($ulldpd_cfg, 'BOND_SRC_MAC', 'Source MAC on Bond Slaves', '<p>Source MAC address of LLDP frames sent on the members (slaves) of a bond. <strong>Default</strong> keeps lldpd\'s default (<em>local</em>). <strong>real</strong> = the slave\'s own MAC, <strong>zero</strong> = 00:00:00:00:00:00, <strong>fixed</strong> = a fixed value (00:60:08:69:97:ef), <strong>local</strong> = the real MAC with the locally-administered bit set. Some switches complain about <em>zero</em> or <em>fixed</em> (invalid or flapping MAC); <em>local</em> could in theory duplicate another MAC. Only matters with bonding/LACP.</p>', ['default' => 'Default (local)', 'real' => 'real', 'zero' => 'zero', 'fixed' => 'fixed', 'local' => 'local']);
     ulldpd_txt($ulldpd_cfg, 'TX_INTERVAL', 'Transmit Interval (seconds)', '<p>Seconds between two LLDP frames, 1 to 3600. Default: 30.</p>', '[0-9]{1,4}', 4, '30');
     ulldpd_txt($ulldpd_cfg, 'TX_HOLD', 'Transmit Hold', '<p>Multiplier of the transmit interval used as the time-to-live of sent frames, 1 to 100. Default: 4 (TTL 120 seconds).</p>', '[0-9]{1,3}', 3, '4');
     ?>
+
+    <?
+    ulldpd_sel($ulldpd_cfg, 'NOTIFY', 'Neighbor Change Notifications', '<p>When <strong>\'Yes\'</strong> an Unraid notification is sent when a neighbor appears, disappears or changes (system name or port ID). Default: No. To avoid floods from a flapping link at most 5 notifications are sent per 10 minutes (one per interface and kind every 2 minutes); the rest is summarised in one notification. A neighbor must be gone for 60 seconds before it counts as removed. Changes are always recorded in the history below the neighbor table, whatever this setting is.</p>');
+    ulldpd_enum($ulldpd_cfg, 'NOTIFY_LEVEL', 'Notification Importance', '<p>Importance of the neighbor change notifications: normal or warning.</p>', ['normal' => 'Normal', 'warning' => 'Warning']);
+    ?>
+
+    <dl>
+        <dt><strong>Ports:</strong></dt>
+        <dd id="ulldpd-ports"><?=ulldpd_ports_table_html($ulldpd_cfg);?></dd>
+    </dl>
+    <blockquote class="inline_help">
+        <p>The network interfaces matching the interface pattern (physical NICs and bonds, with their bond membership and LACP state). <strong>LLDP status</strong> sets what lldpd does on that port: <em>rx-and-tx</em> (default), <em>rx-only</em> (listen only), <em>tx-only</em> or <em>disabled</em>. <strong>Port ID override</strong> advertises a local port ID (text, <code>%i</code> = interface name) on that port, and <strong>Port description override</strong> its description; both fall back to the global settings above when empty. Same allowed characters as the global texts. lldpd 1.0.22 cannot advertise a different management address or management VLAN for a single port: the Management Address Pattern above applies to all ports. Changing a port back to a default value takes effect with <strong>Apply</strong> (the service is restarted).</p>
+    </blockquote>
 
     <dl>
         <dt>
@@ -162,9 +189,34 @@ function ulldpdRefresh() {
         ulldpdRunning = !!d.running;
         $('#ulldpd-status').html(d.status);
         $('#ulldpd-neighbors').html(d.neighbors);
+        if (typeof d.history === 'string') $('#ulldpd-history').html(d.history);
+        ulldpdApplyOpen();
         $('#ulldpd-chassis').html(d.chassis);
         checkRUNNING();
     }, 'json');
+}
+// expanded detail rows survive the periodic table refresh
+var ulldpdOpen = {};
+function ulldpdApplyOpen() {
+    $('#ulldpd-neighbors tr.ulldpd-det').each(function() {
+        var n = $(this).attr('data-if');
+        var open = ulldpdOpen[n] === true;
+        $(this).toggle(open);
+        $('#ulldpd-neighbors a.ulldpd-tog').filter(function() { return $(this).attr('data-if') === n; })
+            .find('i').attr('class', open ? 'fa fa-minus-square-o' : 'fa fa-plus-square-o');
+    });
+}
+function ulldpdClearHistory() {
+    if (!confirm('Clear the recorded neighbor changes?')) return;
+    $.post('/plugins/ulldpd/include/history.php', {action: 'clear', csrf_token: ulldpdCsrf}, function(d) {
+        $('#ulldpd-history-msg').text(d && d.message ? d.message : 'Cleared.');
+        if (d && typeof d.history === 'string') $('#ulldpd-history').html(d.history);
+        ulldpdRefresh();
+    }, 'json').fail(function(x) {
+        var m = 'Clear failed.';
+        try { m = JSON.parse(x.responseText).error || m; } catch (e) {}
+        $('#ulldpd-history-msg').text(m);
+    });
 }
 function ulldpdSaveCustom() {
     $('#ulldpd-custom-msg').text('Saving...');
@@ -181,6 +233,18 @@ $(function() {
     $('#RESTART').click(Restart);
     $('#ulldpd-refresh').click(ulldpdRefresh);
     $('#ulldpd-custom-save').click(ulldpdSaveCustom);
+    $('#ulldpd-history-clear').click(ulldpdClearHistory);
+    $(document).on('click', 'a.ulldpd-tog', function(e) {
+        e.preventDefault();
+        var n = $(this).attr('data-if');
+        ulldpdOpen[n] = !ulldpdOpen[n];
+        ulldpdApplyOpen();
+    });
+    // "Default" also resets the per-port fields (the default.cfg handling only knows the global keys)
+    $('#DEFAULT').click(function() {
+        $('#ulldpd-ports select.ulldpd-port-status').each(function() { $(this).val($(this).attr('data-default')); });
+        $('#ulldpd-ports input.ulldpd-port-text').val('');
+    });
 
     checkRUNNING();
     setInterval(ulldpdRefresh, 10000);

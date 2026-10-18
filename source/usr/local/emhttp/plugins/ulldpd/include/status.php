@@ -21,7 +21,9 @@ $out = [
     'status'  => ulldpd_status_html($snap),
 ];
 if ($what === 'all') {
-    $out['neighbors'] = $snap['running'] ? ulldpd_neighbors_html($snap['rows']) : '<em>The LLDP service is not running.</em>';
+    list($hist) = ulldpd_state_load();
+    $out['neighbors'] = $snap['running'] ? ulldpd_neighbors_html($snap['rows'], $hist) : '<em>The LLDP service is not running.</em>';
+    $out['history']   = ulldpd_history_html($hist);
     $out['chassis']   = $snap['running'] ? ulldpd_chassis_html($snap['chassis']) : '<em>The LLDP service is not running.</em>';
 } else {
     $out['rows'] = $snap['running'] ? ulldpd_tile_rows_html($snap['rows']) : '<tr class="ulldpd-row"><td><em>LLDP service is not running.</em></td></tr>';

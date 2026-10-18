@@ -24,17 +24,35 @@ const ULLDPD_PIDFILE     = "/run/lldpd.pid";
 const ULLDPD_LLDPCLI     = "/usr/sbin/lldpcli";
 const ULLDPD_LLDPD       = "/usr/sbin/lldpd";
 const ULLDPD_VARINI      = "/var/local/emhttp/var.ini";
+const ULLDPD_HISTORY_FILE = "/boot/config/plugins/ulldpd/history.json";
+const ULLDPD_STATE_FILE  = "/run/ulldpd-state.json";   /* RAM copy used by the watcher and the page */
+const ULLDPD_WATCH_PID   = "/run/ulldpd-watch.pid";
+const ULLDPD_NOTIFY      = "/usr/local/emhttp/webGui/scripts/notify";
+const ULLDPD_MAX_PORTS   = 64;
 
 /* Settings schema. Every value from the cfg file is validated against these
  * patterns (the same ones rc.lldpd uses); an invalid value falls back to the
  * default. The cfg is parsed as data and never executed. */
-const ULLDPD_BOOL_KEYS = ['SERVICE', 'FORCE', 'CDP', 'FDP', 'SONMP', 'EDP', 'RXONLY', 'IFALIAS'];
+const ULLDPD_BOOL_KEYS = ['SERVICE', 'FORCE', 'CDP', 'FDP', 'SONMP', 'EDP', 'RXONLY', 'IFALIAS', 'NOTIFY'];
 const ULLDPD_DEFAULTS  = [
     'SERVICE' => 'disable', 'FORCE' => 'disable', 'CDP' => 'disable', 'FDP' => 'disable',
     'SONMP' => 'disable', 'EDP' => 'disable', 'RXONLY' => 'disable', 'IFALIAS' => 'disable',
     'IFACES' => 'eth*', 'MGMT_PATTERN' => '', 'CHASSIS_IFACE' => '', 'SYSNAME' => '',
     'SYSDESCR' => '', 'TX_INTERVAL' => '30', 'TX_HOLD' => '4',
+    'PORTID_SUBTYPE' => 'default', 'PORTID_LOCAL' => '', 'PORTDESCR' => '', 'BOND_SRC_MAC' => 'default',
+    'NOTIFY' => 'disable', 'NOTIFY_LEVEL' => 'normal',
 ];
+/* Enumerated settings */
+const ULLDPD_ENUMS = [
+    'PORTID_SUBTYPE' => ['default', 'ifname', 'macaddress', 'local'],
+    'BOND_SRC_MAC'   => ['default', 'real', 'zero', 'fixed', 'local'],
+    'NOTIFY_LEVEL'   => ['normal', 'warning'],
+];
+/* Per-port settings are stored as PORT_STATUS_<if>, PORT_ID_<if>, PORT_DESCR_<if>
+ * ('.' in the interface name is written as _x2e_ because PHP turns dots in POST
+ * names into underscores). */
+const ULLDPD_PORT_STATUSES = ['rx-and-tx', 'rx-only', 'tx-only', 'disabled'];
+const ULLDPD_PORT_FIELDS   = ['STATUS' => 'status', 'ID' => 'id', 'DESCR' => 'descr'];
 /* Anchored with \A..\z (no trailing-newline allowance) */
 const ULLDPD_PATTERNS  = [
     'IFACES'        => '/\A[A-Za-z0-9_.*,!-]{1,128}\z/',
@@ -44,9 +62,45 @@ const ULLDPD_PATTERNS  = [
     'SYSDESCR'      => '/\A[A-Za-z0-9 ._,:\/()+@%=~*\[\]-]{0,200}\z/',
 ];
 
+/* Interface name usable as an lldpcli argv word (no leading '-', so it can never look like an option). */
+function ulldpd_ifname_valid($n) {
+    return is_string($n) && preg_match('/\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}\z/', $n) === 1;
+}
+
+/* Free text for port ID / port description: printable subset, no quotes or
+ * newlines, no leading '-' or blank, '%' only as the %i (interface name) template. */
+function ulldpd_text_valid($v, $max) {
+    return is_string($v) && strlen($v) <= $max
+        && preg_match('/\A(?![- ])(?!.*%(?!i))[A-Za-z0-9 ._,:\/()+@%=~*\[\]-]*\z/', $v) === 1;
+}
+
+/* cfg key name for a per-port setting, e.g. ulldpd_port_key('STATUS', 'eth0.5') = PORT_STATUS_eth0_x2e_5 */
+function ulldpd_port_key($field, $if) {
+    return 'PORT_' . $field . '_' . str_replace('.', '_x2e_', $if);
+}
+
+/* [field, ifname] for a per-port cfg key, or null */
+function ulldpd_parse_port_key($key) {
+    if (!preg_match('/\APORT_(STATUS|ID|DESCR)_([A-Za-z0-9_-]{1,80})\z/', $key, $m)) return null;
+    $if = str_replace('_x2e_', '.', $m[2]);
+    return ulldpd_ifname_valid($if) ? [$m[1], $if] : null;
+}
+
+/* Is $val an acceptable value for per-port field $field (STATUS|ID|DESCR)? */
+function ulldpd_port_valid($field, $val) {
+    if (!is_string($val)) return false;
+    if ($field === 'STATUS') return in_array($val, ULLDPD_PORT_STATUSES, true);
+    if ($field === 'ID')     return ulldpd_text_valid($val, 64);
+    if ($field === 'DESCR')  return ulldpd_text_valid($val, 100);
+    return false;
+}
+
 /* Is $val an acceptable value for setting $key? */
 function ulldpd_valid($key, $val) {
     if (!is_string($val)) return false;
+    if (isset(ULLDPD_ENUMS[$key])) return in_array($val, ULLDPD_ENUMS[$key], true);
+    if ($key === 'PORTID_LOCAL') return ulldpd_text_valid($val, 64);
+    if ($key === 'PORTDESCR')    return ulldpd_text_valid($val, 100);
     if (in_array($key, ULLDPD_BOOL_KEYS, true)) return $val === 'enable' || $val === 'disable';
     if ($key === 'TX_INTERVAL') return preg_match('/\A[0-9]{1,4}\z/', $val) && (int)$val >= 1 && (int)$val <= 3600;
     if ($key === 'TX_HOLD')     return preg_match('/\A[0-9]{1,3}\z/', $val) && (int)$val >= 1 && (int)$val <= 100;
@@ -65,18 +119,28 @@ function ulldpd_h($v) {
 /* Parse the cfg file as data: KEY="value" lines, whitelisted keys, validated values. */
 function ulldpd_load_cfg($file = ULLDPD_CFG_FILE) {
     $cfg = ULLDPD_DEFAULTS;
+    $cfg['ports'] = [];
     $lines = @file($file, FILE_IGNORE_NEW_LINES);
     if (!is_array($lines)) return $cfg;
     foreach ($lines as $line) {
         $line = rtrim($line, "\r");
-        if (!preg_match('/\A\s*([A-Z_]+)\s*=\s*(.*?)\s*\z/', $line, $m)) continue;
-        if (!array_key_exists($m[1], ULLDPD_DEFAULTS)) continue;
+        if (!preg_match('/\A\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*\z/', $line, $m)) continue;
+        $pk = ulldpd_parse_port_key($m[1]);
+        if ($pk === null && !array_key_exists($m[1], ULLDPD_DEFAULTS)) continue;
         $val = $m[2];
         if (strlen($val) >= 2 && ($val[0] === '"' || $val[0] === "'") && $val[strlen($val) - 1] === $val[0]) {
             $val = substr($val, 1, -1);
         }
-        if (ulldpd_valid($m[1], $val)) $cfg[$m[1]] = $val;
+        if ($pk !== null) {
+            if (!ulldpd_port_valid($pk[0], $val)) continue;
+            if (!isset($cfg['ports'][$pk[1]]) && count($cfg['ports']) >= ULLDPD_MAX_PORTS) continue;
+            $cfg['ports'][$pk[1]][ULLDPD_PORT_FIELDS[$pk[0]]] = $val;
+        } elseif (ulldpd_valid($m[1], $val)) {
+            $cfg[$m[1]] = $val;
+        }
     }
+    /* a global local port ID needs the %i template, otherwise every port would get the same ID */
+    if ($cfg['PORTID_SUBTYPE'] === 'local' && strpos($cfg['PORTID_LOCAL'], '%i') === false) $cfg['PORTID_SUBTYPE'] = 'default';
     if ($cfg['IFACES'] === '') $cfg['IFACES'] = 'eth*';
     return $cfg;
 }
@@ -139,7 +203,9 @@ function ulldpd_version() {
 function ulldpd_json($what) {
     if (!in_array($what, ['chassis', 'neighbors'], true)) return null;
     if (!is_executable(ULLDPD_LLDPCLI)) return null;
-    list($rc, $out) = ulldpd_run([ULLDPD_LLDPCLI, '-f', 'json', 'show', $what]);
+    $argv = [ULLDPD_LLDPCLI, '-f', 'json', 'show', $what];
+    if ($what === 'neighbors') $argv[] = 'details';
+    list($rc, $out) = ulldpd_run($argv);
     if ($rc !== 0) return null;
     $json = json_decode($out, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
     return is_array($json) ? $json : null;
@@ -203,23 +269,114 @@ function ulldpd_chassis_info($ch) {
     ];
 }
 
-/* Neighbour rows (one per received neighbour/interface). */
+/* short plain string for the detail view (bounded) */
+function ulldpd_dstr($v, $max = 160) {
+    return mb_substr(ulldpd_str($v), 0, $max, 'UTF-8');
+}
+
+/* "enabled" style flags: true/false or yes/no/on/off strings */
+function ulldpd_flag($v) {
+    if (is_bool($v)) return $v;
+    return is_string($v) && in_array(strtolower($v), ['yes', 'on', 'true', '1'], true);
+}
+
+/* LLDP-MED, 802.3 power and autonegotiation details of one neighbour (all remote-controlled, bounded). */
+function ulldpd_neighbor_details(array $n, array $port) {
+    $d = [];
+    $d['mfs'] = ulldpd_dstr($port['mfs'] ?? '', 16);
+    /* lldpcli JSON: "aggregation" is an object (status/enabled, id); accept a scalar id too */
+    $ag = $port['aggregation'] ?? '';
+    $d['aggregation'] = '';
+    if (is_array($ag)) {
+        $st = $ag['status'] ?? ($ag['enabled'] ?? ($ag['supported'] ?? false));
+        $id = $ag['id'] ?? ($ag['value'] ?? '');
+        $id = is_scalar($id) ? preg_replace('/[^0-9]/', '', (string)$id) : '';
+        if (ulldpd_flag($st) || $id !== '') $d['aggregation'] = ($id !== '' ? substr($id, 0, 10) : 'yes');
+    } elseif (is_scalar($ag)) {
+        $d['aggregation'] = substr(preg_replace('/[^0-9]/', '', (string)$ag), 0, 10);
+    }
+    $an = (isset($port['auto-negotiation']) && is_array($port['auto-negotiation'])) ? $port['auto-negotiation'] : null;
+    $d['autoneg'] = null;
+    if ($an !== null) {
+        $adv = [];
+        $al = $an['advertised'] ?? [];
+        if (is_array($al)) {
+            if (isset($al['type'])) $al = [$al];
+            foreach (array_slice($al, 0, 12) as $a) if (is_array($a) && isset($a['type'])) $adv[] = ulldpd_dstr($a['type'], 24);
+        }
+        $d['autoneg'] = [
+            'supported' => ulldpd_flag($an['supported'] ?? false),
+            'enabled'   => ulldpd_flag($an['enabled'] ?? false),
+            'current'   => ulldpd_dstr($an['current'] ?? '', 120),
+            'advertised' => $adv,
+        ];
+    }
+    $d['power'] = null;
+    if (isset($port['power']) && is_array($port['power'])) {
+        $p = $port['power'];
+        $dt = $p['device-type'] ?? '';
+        if (is_array($dt)) $dt = $dt['value'] ?? '';
+        $d['power'] = [
+            'type'      => ulldpd_dstr($dt, 24),
+            'supported' => ulldpd_flag($p['supported'] ?? false),
+            'enabled'   => ulldpd_flag($p['enabled'] ?? false),
+            'class'     => ulldpd_dstr($p['class'] ?? '', 16),
+            'allocated' => ulldpd_dstr($p['allocated'] ?? '', 16),
+        ];
+    }
+    $d['med'] = null;
+    if (isset($n['lldp-med']) && is_array($n['lldp-med'])) {
+        $m = $n['lldp-med'];
+        $caps = [];
+        $cl = $m['capability'] ?? [];
+        if (is_array($cl)) {
+            if (isset($cl['type'])) $cl = [$cl];
+            foreach (array_slice($cl, 0, 12) as $c) if (is_array($c) && isset($c['type']) && ulldpd_flag($c['available'] ?? false)) $caps[] = ulldpd_dstr($c['type'], 24);
+        }
+        $inv = [];
+        if (isset($m['inventory']) && is_array($m['inventory'])) {
+            foreach (['manufacturer', 'model', 'serial', 'hardware', 'firmware', 'software', 'asset'] as $k) {
+                if (isset($m['inventory'][$k])) { $v = ulldpd_dstr($m['inventory'][$k], 64); if ($v !== '') $inv[$k] = $v; }
+            }
+        }
+        $d['med'] = ['type' => ulldpd_dstr($m['device-type'] ?? '', 48), 'caps' => $caps, 'inventory' => $inv];
+    }
+    return $d;
+}
+
+/* Neighbour rows (one per received neighbour/interface); [] when there are none or lldpcli failed. */
 function ulldpd_neighbors() {
+    $r = ulldpd_neighbors_result();
+    return $r === null ? [] : $r;
+}
+
+/* Same, but null when lldpcli could not be queried (so callers can tell "no neighbours" from "unknown"). */
+function ulldpd_neighbors_result() {
     $json = ulldpd_json('neighbors');
+    return is_array($json) ? ulldpd_rows_from_json($json) : null;
+}
+
+/* Rows from decoded "lldpcli -f json show neighbors details" output. */
+function ulldpd_rows_from_json(array $json) {
     $rows = [];
-    if (!is_array($json) || !isset($json['lldp']['interface'])) return $rows;
+    if (!isset($json['lldp']['interface'])) return $rows;
     foreach (ulldpd_named($json['lldp']['interface']) as $ent) {
         list($ifname, $n) = $ent;
         $ci = ulldpd_chassis_info($n['chassis'] ?? []);
         $port = (isset($n['port']) && is_array($n['port'])) ? $n['port'] : [];
         $vlans = [];
+        $vlanlist = [];
+        $pvid = '';
         if (isset($n['vlan']) && is_array($n['vlan'])) {
             $vl = isset($n['vlan']['vlan-id']) ? [$n['vlan']] : $n['vlan'];
-            foreach ($vl as $v) {
+            foreach (array_slice($vl, 0, 256) as $v) {
                 if (!is_array($v) || !isset($v['vlan-id'])) continue;
-                $t = ulldpd_str($v['vlan-id']);
-                if (!empty($v['pvid'])) $t .= ' (PVID)';
+                $id = ulldpd_dstr($v['vlan-id'], 8);
+                $isp = !empty($v['pvid']) && $v['pvid'] !== 'no' && $v['pvid'] !== 'off';
+                $t = $id;
+                if ($isp) { $t .= ' (PVID)'; $pvid = $id; }
                 $vlans[] = $t;
+                $vlanlist[] = ['id' => $id, 'name' => ulldpd_dstr($v['value'] ?? '', 32), 'pvid' => $isp];
             }
         }
         $rows[] = [
@@ -227,11 +384,16 @@ function ulldpd_neighbors() {
             'via'       => ulldpd_str($n['via'] ?? ''),
             'name'      => $ci['name'],
             'chassis'   => $ci['id'],
+            'descr'     => $ci['descr'],
+            'caps'      => $ci['caps'],
             'port'      => (isset($port['id']) && is_array($port['id'])) ? ulldpd_str($port['id']['value'] ?? '') : '',
             'portdescr' => ulldpd_str($port['descr'] ?? ''),
             'vlans'     => $vlans,
+            'vlanlist'  => $vlanlist,
+            'pvid'      => $pvid,
             'mgmt'      => $ci['mgmt'],
             'age'       => ulldpd_str($n['age'] ?? ''),
+            'detail'    => ulldpd_neighbor_details($n, $port),
         ];
     }
     return $rows;
@@ -250,13 +412,63 @@ function ulldpd_join_h(array $items, $sep = '<br>') {
     return implode($sep, array_map('ulldpd_h', $items));
 }
 
-function ulldpd_neighbors_html(array $rows) {
+/* label: value lines of the expandable details row (all values escaped) */
+function ulldpd_detail_line($label, $valueHtml) {
+    return $valueHtml === '' ? '' : '<div><strong>' . ulldpd_h($label) . ':</strong> ' . $valueHtml . '</div>';
+}
+
+function ulldpd_detail_html(array $r, array $warnings) {
+    $d = $r['detail'];
+    $h = '';
+    foreach ($warnings as $w) $h .= '<div class="red-text"><i class="fa fa-warning"></i> ' . ulldpd_h($w) . '</div>';
+    $h .= ulldpd_detail_line('Remote capabilities', ulldpd_join_h($r['caps'], ', '));
+    $h .= ulldpd_detail_line('System description', ulldpd_h(mb_substr($r['descr'], 0, 200, 'UTF-8')));
+    $h .= ulldpd_detail_line('Port VLAN ID (PVID)', ulldpd_h($r['pvid']));
+    if ($r['vlanlist']) {
+        $t = [];
+        foreach (array_slice($r['vlanlist'], 0, 24) as $v) $t[] = ulldpd_h($v['id'] . ($v['name'] !== '' ? ' ' . $v['name'] : ''));
+        if (count($r['vlanlist']) > 24) $t[] = '+' . (count($r['vlanlist']) - 24) . ' more';
+        $h .= ulldpd_detail_line('VLANs', implode(', ', $t));
+    }
+    $h .= ulldpd_detail_line('Max frame size (MFS)', ulldpd_h($d['mfs']));
+    if ($d['autoneg'] !== null) {
+        $a = $d['autoneg'];
+        $h .= ulldpd_detail_line('PMD autoneg', ulldpd_h('supported ' . ($a['supported'] ? 'yes' : 'no') . ', enabled ' . ($a['enabled'] ? 'yes' : 'no')
+            . ($a['advertised'] ? ', advertised ' . implode(' ', $a['advertised']) : '')));
+        $h .= ulldpd_detail_line('MAU type', ulldpd_h($a['current']));
+    }
+    $h .= ulldpd_detail_line('Link aggregation', $d['aggregation'] !== '' ? ulldpd_h($d['aggregation'] === 'yes' ? 'aggregated' : 'aggregated, ID ' . $d['aggregation']) : '');
+    if ($d['power'] !== null) {
+        $p = $d['power'];
+        $h .= ulldpd_detail_line('PoE', ulldpd_h(($p['type'] !== '' ? $p['type'] : 'unknown') . ', supported ' . ($p['supported'] ? 'yes' : 'no') . ', enabled ' . ($p['enabled'] ? 'yes' : 'no')
+            . ($p['class'] !== '' ? ', class ' . $p['class'] : '') . ($p['allocated'] !== '' ? ', allocated ' . $p['allocated'] : '')));
+    }
+    if ($d['med'] !== null) {
+        $m = $d['med'];
+        $h .= ulldpd_detail_line('LLDP-MED', ulldpd_h(($m['type'] !== '' ? $m['type'] : 'device') . ($m['caps'] ? '; ' . implode(', ', $m['caps']) : '')));
+        if ($m['inventory']) {
+            $t = [];
+            foreach ($m['inventory'] as $k => $v) $t[] = $k . ' ' . $v;
+            $h .= ulldpd_detail_line('MED inventory', ulldpd_h(implode(' | ', $t)));
+        }
+    }
+    return $h === '' ? '<em>No further details advertised.</em>' : $h;
+}
+
+function ulldpd_neighbors_html(array $rows, $state = null) {
     if (!$rows) return '<table class="unraid tablesorter ulldpd-table"><tbody><tr><td><em>No LLDP neighbors detected.</em></td></tr></tbody></table>';
+    $links = ulldpd_local_links();
     $h = '<table class="unraid tablesorter ulldpd-table"><thead><tr><th>Interface</th><th>Protocol</th><th>System name</th><th>Chassis ID</th><th>Port ID</th><th>Port description</th><th>VLAN(s)</th><th>Management IP(s)</th><th>Age</th></tr></thead><tbody>';
     foreach ($rows as $r) {
-        $h .= '<tr><td>' . ulldpd_h($r['iface']) . '</td><td>' . ulldpd_h($r['via']) . '</td><td>' . ulldpd_h($r['name'])
+        $warn = ulldpd_neighbor_warnings($r, $links);
+        $bond = isset($links[$r['iface']]) ? ulldpd_bond_summary($links[$r['iface']], $links) : '';
+        $iface = '<a href="#" class="ulldpd-tog" data-if="' . ulldpd_h($r['iface']) . '" title="Show details"><i class="fa fa-plus-square-o"></i></a> ' . ulldpd_h($r['iface'])
+            . ($warn ? ' <i class="fa fa-warning red-text" title="' . ulldpd_h(implode(' ', $warn)) . '"></i>' : '')
+            . ($bond !== '' ? '<br><small>' . ulldpd_h($bond) . '</small>' : '');
+        $h .= '<tr><td>' . $iface . '</td><td>' . ulldpd_h($r['via']) . '</td><td>' . ulldpd_h($r['name']) . ($state ? ulldpd_previous_html($state, $r) : '')
             . '</td><td>' . ulldpd_h($r['chassis']) . '</td><td>' . ulldpd_h($r['port']) . '</td><td>' . ulldpd_h($r['portdescr'])
-            . '</td><td>' . ulldpd_join_h($r['vlans'], ', ') . '</td><td>' . ulldpd_join_h($r['mgmt']) . '</td><td>' . ulldpd_h($r['age']) . '</td></tr>';
+            . '</td><td>' . ulldpd_join_h($r['vlans'], ', ') . '</td><td>' . ulldpd_join_h($r['mgmt']) . '</td><td>' . ulldpd_h($r['age']) . '</td></tr>'
+            . '<tr class="ulldpd-det" data-if="' . ulldpd_h($r['iface']) . '" style="display:none"><td colspan="9"><small>' . ulldpd_detail_html($r, $warn) . '</small></td></tr>';
     }
     return $h . '</tbody></table>';
 }
@@ -321,6 +533,9 @@ function ulldpd_json_exit($code, $data) {
     echo json_encode($data);
     exit;
 }
+
+require_once __DIR__ . '/ulldpd_ports.php';
+require_once __DIR__ . '/ulldpd_history.php';
 
 $ulldpd_cfg                 = ulldpd_load_cfg();
 $ulldpd_service             = $ulldpd_cfg['SERVICE'];
