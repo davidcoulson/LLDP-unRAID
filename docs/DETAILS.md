@@ -7,7 +7,7 @@ The README has the short version. This is the reference.
 | What | Where |
 | --- | --- |
 | Settings page | Settings > Network Services > LLDP |
-| Dashboard tile | Dashboard, "LLDP" |
+| Dashboard tile | Dashboard, "LLDP Neighbors" |
 | Plugin config | `/boot/config/plugins/ulldpd/ulldpd.cfg` |
 | Custom lldpd config | `/boot/config/plugins/ulldpd/custom.conf` |
 | Neighbour history | `/boot/config/plugins/ulldpd/history.json` |
@@ -36,9 +36,10 @@ fail validation are ignored (the default stays) and a warning is logged.
 | Bond slave source MAC | `BOND_SRC_MAC` | default | Which MAC LLDP frames from bond slaves use. |
 | Notify on neighbour changes | `NOTIFY` `NOTIFY_LEVEL` | disable / normal | Unraid notifications; importance normal or warning. |
 
-Per-port settings (status, port ID, port description) are stored in the same file as extra keys
-whose names include the validated interface name. Interface names must match
-`^[A-Za-z0-9_.-]{1,15}$`.
+Per-port settings are stored in the same file as `PORT_STATUS_<if>`, `PORT_ID_<if>` and
+`PORT_DESCR_<if>`, where a `.` in the interface name is written as `_x2e_` (so `bond0.100` becomes
+`bond0_x2e_100`). Interface names must match `^[A-Za-z0-9_.-]{1,15}$`, and at most 64 ports are
+read.
 
 ### Ports table
 
