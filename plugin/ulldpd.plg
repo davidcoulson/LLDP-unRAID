@@ -3,15 +3,15 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "ulldpd">
 <!ENTITY author    "davidcoulson">
-<!ENTITY version   "2026.10.20">
+<!ENTITY version   "2026.10.21">
 <!ENTITY launch    "Settings/ULLDPDsettings">
 <!ENTITY gitURL    "https://raw.githubusercontent.com/davidcoulson/LLDP-unRAID/main">
 <!ENTITY pluginURL "&gitURL;/plugin/&name;.plg">
 <!ENTITY pkgURL    "&gitURL;/packages">
 <!ENTITY plgPATH   "/boot/config/plugins/&name;">
-<!ENTITY plgNAME   "ulldpd-2026.10.20-x86_64-1">
-<!ENTITY plgMD5    "676198c821214a7f142325e287dc3559">
-<!ENTITY plgSHA256 "7c5505c03c2675702bace5faac9a4c6ddf1db7c3d1708db95ce26abc9d31eeb2">
+<!ENTITY plgNAME   "ulldpd-2026.10.21-x86_64-1">
+<!ENTITY plgMD5    "677f7bfda7646806174a7b765afd48f8">
+<!ENTITY plgSHA256 "b8e87ac78df48b907425c261b61ce51c0a9e64756cfbaa642c2c6dd02e3bb2e0">
 <!ENTITY lldpdNAME "lldpd-1.0.22-x86_64-1">
 <!ENTITY lldpdMD5  "09d7c96070494afdeb31e5d0629200c4">
 <!ENTITY lldpdSHA256 "d31e863c54b527f09ca10595b1edb24d4af907ce29a7eb1b03c490a2fc01896c">
@@ -22,6 +22,15 @@
 
 <CHANGES>
 ## LLDP for UNRAID
+###2026.10.21
+- fix: interface patterns that only exclude (for example "!eth2") now select all other interfaces in the Ports table, the %i templates and the rc script
+- fix: link aggregation in the neighbor details is read from lldpcli's object (status, id)
+- fix: LLDP-MED capabilities reported as "no" are no longer listed as available
+- fix: LACP is only shown as ok when actor and partner churn state are both none
+- fix: neighbor history tracks every neighbor of an interface (interface + chassis ID + port ID), so multi-neighbor ports and reordering no longer cause false events
+- fix: after a service restart, neighbors loaded from the history get a startup grace (tx interval x hold, at least 90 seconds) before they can be reported removed
+- fix: the rate-limit summary of suppressed notifications is no longer lost when a new window starts
+- fix: notifications sent in one batch get distinct Unraid event names so none are dropped, and only delivered notifications count against the rate limit
 ###2026.10.20
 - new: Ports table on the settings page: the physical NICs and bonds matching the interface pattern with link state/speed/MTU, bond membership (master/slave, mode, LACP state) and a per-port LLDP status (rx-and-tx, rx-only, tx-only, disabled)
 - new: port ID subtype (default, ifname, macaddress, local), port description and bond slave source MAC settings, with per-port overrides of the port ID (local) and port description; `%i` in the texts is replaced by the interface name
